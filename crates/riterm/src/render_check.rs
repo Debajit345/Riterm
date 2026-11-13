@@ -31,6 +31,9 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
     alternate.feed(&secondary_screen());
     if std::env::var_os("RITERM_RENDER_SCROLLBACK").is_some() {
         for line in 0..40 {
+            if line % 8 == 0 {
+                primary.feed(b"\x1b]133;A\x07");
+            }
             primary.feed(format!("scrollback line {line}\r\n").as_bytes());
         }
         primary.scroll(38);

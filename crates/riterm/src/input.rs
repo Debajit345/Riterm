@@ -33,6 +33,10 @@ pub enum Action {
     SearchNext,
     SearchPrev,
     CopyMode,
+    PrevMark,
+    NextMark,
+    SelectOutput,
+    CopyOutput,
 }
 
 impl Action {
@@ -66,6 +70,10 @@ impl Action {
                 "search_next" | "find_next" => SearchNext,
                 "search_prev" | "find_prev" => SearchPrev,
                 "copy_mode" => CopyMode,
+                "prev_mark" | "previous_mark" => PrevMark,
+                "next_mark" => NextMark,
+                "select_output" => SelectOutput,
+                "copy_output" => CopyOutput,
                 // `select_tab_1` .. `select_tab_9`
                 other => {
                     let index = other.strip_prefix("select_tab_")?.parse::<usize>().ok()?;
@@ -112,6 +120,10 @@ pub fn default_bindings() -> HashMap<String, Action> {
     add("f3", SearchNext);
     add("shift+f3", SearchPrev);
     add("ctrl+shift+space", CopyMode);
+    add("ctrl+shift+p", PrevMark);
+    add("ctrl+shift+n", NextMark);
+    add("ctrl+shift+a", SelectOutput);
+    add("ctrl+shift+o", CopyOutput);
     map
 }
 
@@ -355,6 +367,22 @@ mod action_tests {
             Some(Action::SelectTab(2))
         );
         assert_eq!(Action::from_name("focus_left"), Some(Action::FocusLeft));
+        assert_eq!(Action::from_name("prev_mark"), Some(Action::PrevMark));
+        assert_eq!(Action::from_name("next_mark"), Some(Action::NextMark));
+        assert_eq!(
+            Action::from_name("select_output"),
+            Some(Action::SelectOutput)
+        );
+        assert_eq!(Action::from_name("copy_output"), Some(Action::CopyOutput));
         assert_eq!(Action::from_name("nonsense"), None);
+    }
+
+    #[test]
+    fn mark_actions_have_default_bindings() {
+        let bindings = default_bindings();
+        assert_eq!(bindings.get("ctrl+shift+p"), Some(&Action::PrevMark));
+        assert_eq!(bindings.get("ctrl+shift+n"), Some(&Action::NextMark));
+        assert_eq!(bindings.get("ctrl+shift+a"), Some(&Action::SelectOutput));
+        assert_eq!(bindings.get("ctrl+shift+o"), Some(&Action::CopyOutput));
     }
 }

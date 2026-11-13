@@ -87,12 +87,12 @@ It is a roadmap document, not a claim of parity. Status values:
 |---|---|---|
 | OSC 133 A/B/C/D marks | Yes | ✅ |
 | Command exit status | Yes | ✅ |
-| Prompt marks stored per session | Yes | ✅ (bounded at 10k marks) |
+| Prompt marks stored per session | Yes | ✅ re-anchored as scrollback grows, bounded at 10k |
 | Tab running / failure indicator | Yes | ✅ |
 | Current directory (OSC 7) | Yes | 🟡 scripts emit it; URL is not yet parsed into session state |
 | bash/zsh/fish installer | Yes | ✅ `--install-shell-integration` |
-| Marks navigation and selection | Yes | ⏳ |
-| Per-command "copy output" | Yes | ⏳ |
+| Marks navigation and selection | Yes | ✅ jump previous/next prompt; select latest output |
+| Per-command "copy output" | Yes | ✅ latest command output; per-mark history UI planned |
 | Utilities (`imgcat`, `it2copy`, `it2dl`, ...) | Yes | ⏳ |
 | `it2ssh`, remote host integration | Yes | ⏳ |
 | User vars / badges (OSC 1337) | Yes | ⏳ |

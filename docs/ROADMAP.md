@@ -29,9 +29,8 @@ Remaining MVP limitations:
 
 - ASCII grid runs use basic shaping, so ligatures are not guaranteed
 - One window; no session restore
-- OSC 133 marks are recorded but not navigable
 - Fixed top tab bar; no drag-reorder
-- No search, copy mode, triggers, or inline images
+- No triggers or inline images
 
 ## Milestone 2 — daily-driver polish (next)
 
@@ -58,8 +57,9 @@ Target: replace a normal terminal for everyday work.
 Target: the features that make iTerm2 distinctive.
 
 - [ ] tmux `-CC` control-mode client (windows, panes, layouts, titles)
-- [ ] OSC 133 marks UI: jump to previous/next prompt, select command output
-- [ ] Per-command "copy output", "re-run", exit-status actions
+- [x] OSC 133 marks UI: jump to previous/next prompt, select command output
+- [x] Latest-command "copy output"
+- [ ] Per-command history UI, "re-run", exit-status actions
 - [ ] Triggers: regex match → highlight, annotate, run command, notify
 - [ ] Inline images: iTerm2 image protocol, then sixel
 - [ ] Status bar with components (cwd, git, command status, clock)

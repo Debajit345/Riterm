@@ -44,6 +44,9 @@ and configuration formats.
 - **Pointer workflow**: double-click selects a word, triple-click selects a
   line, middle-click pastes, and `Ctrl+click` opens OSC 8 hyperlinks or URLs.
   A scrollbar appears while you are scrolled back.
+- **Prompt marks**: jump between OSC 133 prompt starts with the keyboard,
+  select the latest command's output, or copy it straight to the clipboard.
+  Prompt marks also appear as ticks beside the scrollbar.
 - **Terminal core** from `alacritty_terminal`: full VT/ANSI parsing, scrollback,
   alternate screen, bracketed paste, mouse reporting, OSC clipboard and title
   handling.
@@ -208,6 +211,9 @@ restart.
 | `Ctrl+F` | Search scrollback |
 | `F3` / `Shift+F3` | Next / previous search match |
 | `Ctrl+Shift+Space` | Toggle copy mode |
+| `Ctrl+Shift+P` / `Ctrl+Shift+N` | Jump to previous / next prompt mark |
+| `Ctrl+Shift+A` | Select the latest command output |
+| `Ctrl+Shift+O` | Copy the latest command output |
 | `Esc` | Close search or copy mode |
 
 Override or add bindings in `config.toml`:

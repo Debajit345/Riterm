@@ -17,7 +17,7 @@ use glyphon::{
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
 use riterm_config::{ResolvedProfile, Rgb};
-use riterm_core::Session;
+use riterm_core::{MarkKind, Session};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
@@ -643,6 +643,37 @@ impl Renderer {
                 profile.cursor,
                 0.55,
             );
+
+            // Prompt marks as ticks beside the scrollbar. Re-anchor each mark
+            // because points move as scrollback grows.
+            let topmost = term.grid().topmost_line().0;
+            let bottommost = term.grid().bottommost_line().0;
+            let span = (bottommost - topmost).max(1) as f32;
+            let mut lines: Vec<i32> = session
+                .marks
+                .iter()
+                .filter(|mark| {
+                    matches!(mark.kind, MarkKind::PromptStart | MarkKind::CommandFinished)
+                })
+                .map(|mark| mark.point.line.0 + mark.history_size as i32 - history as i32)
+                .filter(|line| *line >= topmost && *line <= bottommost)
+                .collect();
+            lines.sort_unstable();
+            lines.dedup();
+            let tick_h = (2.0 * self.scale as f32).max(1.0);
+            for line in lines {
+                let y = inner.y + (line - topmost) as f32 / span * inner.h;
+                self.push_quad(
+                    Rect::new(
+                        inner.right() - 8.0 * self.scale as f32,
+                        y,
+                        8.0 * self.scale as f32,
+                        tick_h,
+                    ),
+                    profile.badge,
+                    0.85,
+                );
+            }
         }
 
         // Search hits are translucent overlays. The current hit is also the

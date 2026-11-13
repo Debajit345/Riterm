@@ -113,6 +113,14 @@ keyboard ──► App::handle_key ──► Action or encode_key ──► Sess
 failure is still reported when bash emits `D;1` and the next `A` in the same
 read (the `A` resets the live state to `Idle`).
 
+Each mark stores its absolute point together with the history size at capture
+time. A point's offset from the top of the buffer is stable as scrollback grows,
+so the app re-anchors a mark by adding the recorded history size and subtracting
+the current one. Mark navigation selects the nearest prompt start, command
+output selection spans `C` to `D` (or the cursor while a command is running),
+and the scrollbar draws prompt and finished-command ticks after the same
+re-anchoring.
+
 ## Rendering
 
 Each frame:

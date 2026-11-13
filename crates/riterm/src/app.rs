@@ -7,13 +7,13 @@ use std::time::{Duration, Instant, SystemTime};
 
 use alacritty_terminal::event::{Event as TermEvent, WindowSize};
 use alacritty_terminal::grid::Dimensions;
-use alacritty_terminal::index::{Column, Point, Side};
+use alacritty_terminal::index::{Column, Line, Point, Side};
 use alacritty_terminal::selection::{Selection, SelectionType};
 use alacritty_terminal::term::{TermMode, viewport_to_point};
 use alacritty_terminal::vte::ansi::Rgb as AnsiRgb;
 use anyhow::Result;
 use riterm_config::{Config, ResolvedProfile, Rgb, expand_home};
-use riterm_core::{Session, SessionConfig, SessionEvent, SessionSink};
+use riterm_core::{Mark, MarkKind, Session, SessionConfig, SessionEvent, SessionSink};
 use tracing::{debug, warn};
 use winit::application::ApplicationHandler;
 use winit::dpi::{LogicalSize, PhysicalPosition};
@@ -944,6 +944,73 @@ impl App {
         }
     }
 
+    fn jump_mark(&mut self, forward: bool) {
+        let Some(session) = self.active_session_mut() else {
+            return;
+        };
+        let display_offset = session.term.grid().display_offset();
+        let top = viewport_to_point(display_offset, Point::new(0, Column(0)))
+            .line
+            .0;
+        let history = session.term.grid().history_size();
+        let mut marks: Vec<Point> = session
+            .marks
+            .iter()
+            .filter(|mark| mark.kind == MarkKind::PromptStart)
+            .map(|mark| anchored_mark_point(mark, history))
+            .collect();
+        marks.sort_by_key(|point| (point.line.0, point.column.0));
+        marks.dedup();
+        let target = if forward {
+            marks.into_iter().find(|point| point.line.0 > top)
+        } else {
+            marks.into_iter().rev().find(|point| point.line.0 < top)
+        };
+        if let Some(point) = target {
+            session.term.scroll_to_point(point);
+            session.dirty = true;
+            self.request_redraw();
+        }
+    }
+
+    fn select_output(&mut self, copy: bool) {
+        let Some(session) = self.active_session_mut() else {
+            return;
+        };
+        let Some(index) = session
+            .marks
+            .iter()
+            .rposition(|mark| mark.kind == MarkKind::CommandStart)
+        else {
+            return;
+        };
+        let history = session.term.grid().history_size();
+        let topmost = session.term.grid().topmost_line().0;
+        let bottommost = session.term.grid().bottommost_line().0;
+        let start = anchored_mark_point(&session.marks[index], history);
+        let start = Point::new(Line(start.line.0.max(topmost)), start.column);
+        let end = session.marks[index + 1..]
+            .iter()
+            .find(|mark| mark.kind == MarkKind::CommandFinished)
+            .map(|mark| anchored_mark_point(mark, history))
+            .unwrap_or_else(|| session.term.grid().cursor.point);
+        let end = Point::new(
+            Line(end.line.0.min(bottommost).max(start.line.0)),
+            end.column,
+        );
+        select_term_range(&mut session.term, start, end);
+        session.term.scroll_to_point(start);
+        session.dirty = true;
+        let text = copy
+            .then(|| session.term.selection_to_string())
+            .flatten()
+            .filter(|text| !text.is_empty());
+        if let Some(text) = text {
+            self.set_clipboard(text);
+        }
+        self.request_redraw();
+    }
+
     fn perform_action(&mut self, action: Action, event_loop: &ActiveEventLoop) {
         if matches!(
             action,
@@ -958,6 +1025,10 @@ impl App {
                 | Action::FocusRight
                 | Action::FocusUp
                 | Action::FocusDown
+                | Action::PrevMark
+                | Action::NextMark
+                | Action::SelectOutput
+                | Action::CopyOutput
         ) {
             self.close_search();
             self.exit_copy_mode(false);
@@ -1000,6 +1071,10 @@ impl App {
             Action::SearchNext => self.search_step(true),
             Action::SearchPrev => self.search_step(false),
             Action::CopyMode => self.toggle_copy_mode(),
+            Action::PrevMark => self.jump_mark(false),
+            Action::NextMark => self.jump_mark(true),
+            Action::SelectOutput => self.select_output(false),
+            Action::CopyOutput => self.select_output(true),
         }
     }
 
@@ -1741,6 +1816,15 @@ impl ApplicationHandler<UserEvent> for App {
     }
 }
 
+/// Re-anchor a mark recorded at its own `history_size` to the current grid.
+///
+/// A point's offset from the top of the buffer stays constant as scrollback
+/// grows, so the same mark keeps pointing at the same output line.
+fn anchored_mark_point(mark: &Mark, history: usize) -> Point {
+    let line = mark.point.line.0 + mark.history_size as i32 - history as i32;
+    Point::new(Line(line), mark.point.column)
+}
+
 fn open_url(url: &str) {
     let lower = url.to_ascii_lowercase();
     if !["http://", "https://", "ftp://", "file://", "mailto:"]
@@ -1846,7 +1930,23 @@ fn _typecheck(_: Key) {}
 
 #[cfg(test)]
 mod tests {
-    use super::observe_finished_commands;
+    use super::{anchored_mark_point, observe_finished_commands};
+    use alacritty_terminal::index::{Column, Line, Point};
+    use riterm_core::{Mark, MarkKind};
+    use std::time::Instant;
+
+    #[test]
+    fn marks_stay_anchored_as_history_grows() {
+        let mark = Mark {
+            kind: MarkKind::PromptStart,
+            point: Point::new(Line(-3), Column(7)),
+            history_size: 20,
+            at: Instant::now(),
+        };
+        // Content moves up by four lines while history grows by four.
+        let point = anchored_mark_point(&mark, 24);
+        assert_eq!(point, Point::new(Line(-7), Column(7)));
+    }
 
     #[test]
     fn new_failure_is_reported_once() {
