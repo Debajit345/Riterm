@@ -1,0 +1,38 @@
+[workspace]
+resolver = "2"
+members = [
+    "crates/riterm-config",
+    "crates/riterm-core",
+    "crates/riterm",
+]
+
+[workspace.package]
+version = "0.1.0"
+edition = "2024"
+license = "GPL-3.0-or-later"
+repository = "https://github.com/Debajit345/Riterm"
+rust-version = "1.85"
+
+[workspace.dependencies]
+anyhow = "1.0"
+arboard = "3.7"
+bytemuck = { version = "1.25", features = ["derive"] }
+clap = { version = "4.6", features = ["derive"] }
+directories = "6.0"
+glyphon = "0.12"
+log = "0.4"
+plist = "1.10"
+png = "0.18"
+pollster = "1.0"
+serde = { version = "1.0", features = ["derive"] }
+toml = "1.2"
+tracing = "0.1"
+tracing-subscriber = { version = "0.3", features = ["env-filter"] }
+wgpu = "30.0"
+winit = "0.30.13"
+alacritty_terminal = "0.26"
+
+[profile.release]
+lto = "thin"
+codegen-units = 1
+strip = true
