@@ -30,7 +30,7 @@ Remaining MVP limitations:
 - ASCII grid runs use basic shaping, so ligatures are not guaranteed
 - One window; no session restore
 - Fixed top tab bar; no drag-reorder
-- No triggers or inline images
+- No inline images
 
 ## Milestone 2 — daily-driver polish (next)
 
@@ -50,7 +50,7 @@ Target: replace a normal terminal for everyday work.
 - [x] Cell-accurate fallback for missing glyphs; color emoji renders
 - [x] OSC 8 link hit-testing and open-in-browser
 - [x] Word/URL selection and middle-click paste
-- [ ] Notifications with command-finished summaries
+- [x] Desktop notifications for command finish and BEL
 
 ## Milestone 3 — iTerm2 power features
 
@@ -60,7 +60,8 @@ Target: the features that make iTerm2 distinctive.
 - [x] OSC 133 marks UI: jump to previous/next prompt, select command output
 - [x] Latest-command "copy output"
 - [ ] Per-command history UI, "re-run", exit-status actions
-- [ ] Triggers: regex match → highlight, annotate, run command, notify
+- [x] Triggers: regex match → notify or tab bell
+- [ ] Triggers: highlight, annotate, run command
 - [ ] Inline images: iTerm2 image protocol, then sixel
 - [ ] Status bar with components (cwd, git, command status, clock)
 - [ ] Badges and user variables (OSC 1337 SetUserVar)

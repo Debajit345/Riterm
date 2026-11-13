@@ -35,7 +35,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | OSC 8 hyperlinks | Yes | ✅ link color/underline and `Ctrl+click` open |
 | OSC 52 clipboard | Yes | ✅ via terminal events |
 | Title changes | Yes | ✅ |
-| Bell / attention | Visual and audible options | 🟡 system attention request and tab dot; no sound or configurable visual flash |
+| Bell / attention | Visual and audible options | 🟡 system attention request, tab dot, optional desktop notification; no sound or visual flash |
 | Sync output (DEC 2026) | Yes | ✅ inherited from the emulator |
 | Terminal size reports | CSI 14/16/18 | ✅ `TextAreaSizeRequest` handled |
 
@@ -120,7 +120,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Hotkey window (drop-down) | Yes | ⏳ |
 | Window transparency | Yes | ⏳ |
 | Tabs in separate windows | Yes | ⏳ |
-| Notifications | Yes | 🟡 `request_user_attention` only |
+| Notifications | Yes | 🟡 desktop notifications for command finish, BEL, and triggers via `notify-send` |
 | Session restoration | Yes | ⏳ |
 | Multiple windows | Yes | ⏳ one window, many tabs |
 | macOS Touch Bar / Services / Keychain / Sparkle | Yes | ➖ not applicable |
@@ -132,7 +132,7 @@ It is a roadmap document, not a claim of parity. Status values:
 |---|---|---|
 | Python scripting API | Yes | ⏳ native API planned; no Python embedding |
 | AppleScript | Yes | ➖ |
-| Trigger actions (regex → action) | Yes | ⏳ |
+| Trigger actions (regex → action) | Yes | 🟡 global regex triggers → notify or tab bell; highlight/annotate/run planned |
 | Annotations / notes | Yes | ⏳ |
 | Status bar components | Yes | ⏳ |
 | Badges | Yes | ⏳ |
@@ -144,7 +144,8 @@ It is a roadmap document, not a claim of parity. Status values:
 
 The current build covers the daily-driver foundation and a meaningful slice of
 iTerm2's appearance system: exact default colors, all built-in presets, font
-fallback, bold/selection/cursor colors, minimum contrast, and blinking cursors.
-The largest remaining gaps are search/copy mode, tmux control mode, triggers,
-inline images, the status bar, hotkey windows, background effects, and
-scripting. See [ROADMAP.md](ROADMAP.md) for sequencing.
+fallback, bold/selection/cursor colors, minimum contrast, blinking cursors,
+search, copy mode, prompt marks, and notifications. The largest remaining gaps
+are highlight/run trigger actions, tmux control mode, inline images, the status
+bar, hotkey windows, background effects, and scripting. See
+[ROADMAP.md](ROADMAP.md) for sequencing.

@@ -13,8 +13,8 @@ and configuration formats.
 
 > **Status: early, usable, and expanding.** The terminal, tabs, splits,
 > profiles, built-in themes, font fallback, cursor blinking, imports, search,
-> copy mode, and shell integration work. tmux control mode, triggers, inline
-> images, and scripting are on the roadmap. See
+> copy mode, notifications, and shell integration work. tmux control mode,
+> richer trigger actions, inline images, and scripting are on the roadmap. See
 > [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) and
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -47,6 +47,9 @@ and configuration formats.
 - **Prompt marks**: jump between OSC 133 prompt starts with the keyboard,
   select the latest command's output, or copy it straight to the clipboard.
   Prompt marks also appear as ticks beside the scrollbar.
+- **Notifications and triggers**: desktop notifications for long or failed
+  commands while unfocused, for the bell, and for configured regex triggers.
+  Trigger matches can also mark the tab with the attention dot.
 - **Terminal core** from `alacritty_terminal`: full VT/ANSI parsing, scrollback,
   alternate screen, bracketed paste, mouse reporting, OSC clipboard and title
   handling.
@@ -135,6 +138,10 @@ tab_bar_height = 30.0
 padding = 6.0
 copy_on_select = false
 middle_click_paste = true
+notifications = true
+notify_on_command_finish = false
+notify_on_bell = false
+notification_min_seconds = 5.0
 theme = "Smoooooth"          # any preset from --list-themes, or a file path
 theme_variant = "dark"       # dark | light | auto
 # shell = "/bin/zsh"
@@ -175,19 +182,39 @@ background = "#0f141a"
 
 [keybindings]
 # "ctrl+shift+enter" = "new_tab"
+
+# Output triggers run on complete lines of terminal output.
+# [[triggers]]
+# regex = "(?i)\\b(error|failed|panicked)\\b"
+# action = "notify"          # notify | bell
+# text = "Command reported an error"
+# enabled = true
 ```
 
 `[profiles.NAME]` overrides only the fields it sets. `[profile]` is the base
 for every profile. `theme_variant = "auto"` follows `RITERM_THEME_VARIANT`,
 then `COLORFGBG`, then dark. Config changes are picked up automatically while
-Riterm is running; fonts, colors, padding, and keybindings update without a
-restart.
+Riterm is running; fonts, colors, padding, keybindings, triggers, and
+notification settings update without a restart.
 
 ### Built-in iTerm2 presets
 
 `Regular`, `High Contrast`, `Solarized`, `Light Background`, `Dark Background`,
 `Solarized Light`, `Solarized Dark`, `Pastel (Dark Background)`, `Tango Light`,
 `Tango Dark`, and `Smoooooth`.
+
+### Notifications and triggers
+
+Riterm sends desktop notifications through `notify-send`. Command-finished
+notifications are suppressed while the window is focused, and only fire for
+commands longer than `notification_min_seconds` unless the command failed.
+Enable `notify_on_bell` to notify on BEL while unfocused.
+
+Global `[[triggers]]` match each complete line of terminal output after ANSI
+escape sequences are stripped. Actions are `notify` (a desktop notification)
+and `bell` (the tab attention dot). `text` overrides the notification body;
+otherwise the matched line is shown. A two-second per-trigger cooldown keeps
+repeated errors from flooding the notification daemon.
 
 ## Keybindings
 

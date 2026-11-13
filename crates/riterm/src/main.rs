@@ -3,10 +3,12 @@
 mod app;
 mod input;
 mod layout;
+mod notifications;
 mod render;
 mod render_check;
 mod search;
 mod shell_install;
+mod triggers;
 
 use std::path::PathBuf;
 

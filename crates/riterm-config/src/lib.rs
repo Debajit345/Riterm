@@ -34,6 +34,41 @@ pub const ITERM2_DEFAULT_PALETTE: [&str; 16] = [
 /// Backwards-compatible alias for the default palette.
 pub const DEFAULT_PALETTE: [&str; 16] = ITERM2_DEFAULT_PALETTE;
 
+/// Action taken when an output trigger matches.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum TriggerAction {
+    /// Post a desktop notification.
+    #[default]
+    Notify,
+    /// Mark the tab as needing attention (the same dot as BEL).
+    Bell,
+}
+
+/// A regular expression matched against each line of terminal output.
+///
+/// Triggers are global in this release. `text` overrides the notification body;
+/// when absent the matched line is used.
+#[derive(Clone, Debug, Serialize, Deserialize)]
+#[serde(default)]
+pub struct Trigger {
+    pub regex: String,
+    pub action: TriggerAction,
+    pub text: Option<String>,
+    pub enabled: bool,
+}
+
+impl Default for Trigger {
+    fn default() -> Self {
+        Self {
+            regex: String::new(),
+            action: TriggerAction::Notify,
+            text: None,
+            enabled: true,
+        }
+    }
+}
+
 /// Settings that apply to the application as a whole.
 #[derive(Clone, Debug, Serialize, Deserialize)]
 #[serde(default)]
@@ -55,6 +90,15 @@ pub struct General {
     pub copy_on_select: bool,
     /// Paste the clipboard on middle click.
     pub middle_click_paste: bool,
+    /// Master switch for desktop notifications.
+    pub notifications: bool,
+    /// Notify when a command finishes while the window is unfocused.
+    pub notify_on_command_finish: bool,
+    /// Notify when the terminal bell rings while the window is unfocused.
+    pub notify_on_bell: bool,
+    /// Minimum command runtime for finish notifications, in seconds.
+    /// Failures notify regardless of duration.
+    pub notification_min_seconds: f32,
     /// Built-in iTerm2 preset name or path to an `.itermcolors` file.
     pub theme: Option<String>,
     /// Which appearance variant of the theme to use.
@@ -73,6 +117,10 @@ impl Default for General {
             padding: 6.0,
             copy_on_select: false,
             middle_click_paste: true,
+            notifications: true,
+            notify_on_command_finish: false,
+            notify_on_bell: false,
+            notification_min_seconds: 5.0,
             theme: None,
             theme_variant: ThemeMode::Dark,
         }
@@ -320,6 +368,8 @@ pub struct Config {
     pub profiles: BTreeMap<String, Profile>,
     /// Keybinding overrides, e.g. "ctrl+shift+t" = "new_tab".
     pub keybindings: BTreeMap<String, String>,
+    /// Global output triggers, written as `[[triggers]]` tables.
+    pub triggers: Vec<Trigger>,
     /// Loaded `.itermcolors` theme (not serialized).
     #[serde(skip)]
     pub theme: Option<ItermColors>,
@@ -460,6 +510,10 @@ tab_bar_height = 30.0
 padding = 6.0
 copy_on_select = false
 middle_click_paste = true
+notifications = true
+notify_on_command_finish = false
+notify_on_bell = false
+notification_min_seconds = 5.0
 theme_variant = "dark"
 # theme = "Smoooooth"
 # shell = "/bin/zsh"
@@ -492,6 +546,14 @@ font_size = 14.0
 
 [keybindings]
 # "ctrl+shift+t" = "new_tab"
+
+# Output triggers run on every completed line of terminal output.
+# action = "notify" posts a desktop notification; "bell" marks the tab.
+# [[triggers]]
+# regex = "(?i)\\b(error|failed|panicked)\\b"
+# action = "notify"
+# text = "Command reported an error"
+# enabled = true
 "##;
 
 #[cfg(test)]
@@ -505,6 +567,33 @@ mod tests {
         assert_eq!(p.palette.len(), 16);
         assert!(p.font_size >= 4.0);
         assert_eq!(p.background, Rgb::parse("#15191f").unwrap());
+    }
+
+    #[test]
+    fn default_config_text_parses() {
+        let config: Config = toml::from_str(DEFAULT_CONFIG).expect("default config parses");
+        assert!(config.general.notifications);
+        assert!(!config.general.notify_on_command_finish);
+        assert_eq!(config.general.notification_min_seconds, 5.0);
+        assert!(config.triggers.is_empty());
+    }
+
+    #[test]
+    fn triggers_deserialize_with_defaults() {
+        let config: Config = toml::from_str(
+            r#"
+[[triggers]]
+regex = "(?i)\\b(error|failed)\\b"
+action = "bell"
+text = "Build failed"
+"#,
+        )
+        .expect("trigger config parses");
+        assert_eq!(config.triggers.len(), 1);
+        let trigger = &config.triggers[0];
+        assert_eq!(trigger.action, TriggerAction::Bell);
+        assert_eq!(trigger.text.as_deref(), Some("Build failed"));
+        assert!(trigger.enabled);
     }
 
     #[test]

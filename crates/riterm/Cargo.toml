@@ -21,6 +21,7 @@ glyphon.workspace = true
 log.workspace = true
 png.workspace = true
 pollster.workspace = true
+regex.workspace = true
 tracing.workspace = true
 tracing-subscriber.workspace = true
 wgpu.workspace = true

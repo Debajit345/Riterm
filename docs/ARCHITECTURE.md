@@ -7,7 +7,7 @@ riterm/
 ├── crates/
 │   ├── riterm-config/   TOML config, profiles, iTerm2 importers, presets
 │   ├── riterm-core/     PTY sessions, VT state, OSC 133 scanner
-│   └── riterm/          winit app, wgpu renderer, search/copy mode, CLI
+│   └── riterm/          winit app, wgpu renderer, search/copy, triggers, CLI
 ├── shell-integration/   bash/zsh/fish integration scripts
 ├── third_party/iterm2/  copied iTerm2 plists and provenance
 ├── tools/               preset generator
@@ -72,6 +72,11 @@ escape sequences are split across PTY reads.
 - `input.rs` — default keybindings, chord canonicalization, action lookup, key
   encoding for the PTY (application cursor keys, CSI modifiers, function keys),
   bracketed paste.
+- `triggers.rs` — incremental ANSI-stripping scanner for output triggers. It
+  emits complete lines at `\n`/`\r`, handles escape sequences split across
+  reads, compiles enabled regexes, and skips invalid expressions with a warning.
+- `notifications.rs` — sends notifications through `notify-send` on a detached
+  thread, so a slow notification daemon cannot block the event loop.
 - `search.rs` — case-insensitive scrollback search. It folds each grid cell
   to lowercase, maps matches back to absolute grid points (including negative
   history lines), and provides vi-style word motions for copy mode.
@@ -120,6 +125,18 @@ the current one. Mark navigation selects the nearest prompt start, command
 output selection spans `C` to `D` (or the cursor while a command is running),
 and the scrollbar draws prompt and finished-command ticks after the same
 re-anchoring.
+
+Output triggers are matched on a sanitized stream, not raw PTY bytes. The
+scanner keeps one state machine and byte buffer per session, ignores CSI/OSC
+payloads, and yields lines at newline or carriage-return boundaries so progress
+output is visible to triggers too. The app rebinds trigger regexes on config
+reload and applies a two-second per-trigger cooldown.
+
+Command-finished notifications compare the session's monotonic
+`command_finished_epoch` against the last epoch the app acknowledged. Focused
+windows record the epoch without notifying, so an old completion is never
+replayed after the window loses focus. The notification body uses the duration
+between the last `C` and `D` marks and reports failures regardless of duration.
 
 ## Rendering
 

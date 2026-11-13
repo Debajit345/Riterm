@@ -24,8 +24,10 @@ use winit::window::{UserAttentionType, Window};
 
 use crate::input::{Action, action_for, default_bindings, encode_key, paste_bytes};
 use crate::layout::{PaneNode, Rect, SplitDir};
+use crate::notifications;
 use crate::render::{Renderer, TabInfo};
 use crate::search;
+use crate::triggers::{self, CompiledTrigger, TriggerScanner};
 
 #[cfg(all(unix, not(target_os = "macos")))]
 use winit::platform::wayland::WindowAttributesExtWayland;
@@ -121,6 +123,10 @@ pub struct App {
     last_click: Option<(Instant, PhysicalPosition<f64>, u8)>,
     config_mtime: Option<SystemTime>,
     config_poll_next: Instant,
+    compiled_triggers: Vec<CompiledTrigger>,
+    trigger_scanners: HashMap<u64, TriggerScanner>,
+    trigger_last_fired: HashMap<(u64, usize), Instant>,
+    notified_epochs: HashMap<u64, u64>,
     search: Option<SearchState>,
     copy_mode: Option<CopyState>,
 }
@@ -145,6 +151,8 @@ impl App {
             }
         }
 
+        let compiled_triggers = triggers::compile(&config.triggers);
+
         Self {
             proxy,
             config_path,
@@ -168,6 +176,10 @@ impl App {
             last_click: None,
             config_mtime,
             config_poll_next: Instant::now() + Duration::from_secs(1),
+            compiled_triggers,
+            trigger_scanners: HashMap::new(),
+            trigger_last_fired: HashMap::new(),
+            notified_epochs: HashMap::new(),
             search: None,
             copy_mode: None,
         }
@@ -189,6 +201,7 @@ impl App {
                         None => warn!("unknown action {name:?} for keybinding {chord:?}"),
                     }
                 }
+                self.compiled_triggers = triggers::compile(&config.triggers);
                 self.config = config;
                 self.bindings = bindings;
                 self.mark_all_dirty();
@@ -208,6 +221,132 @@ impl App {
             self.config_mtime = modified;
             self.reload_config();
         }
+    }
+
+    fn session_title(&self, id: u64) -> String {
+        self.find_session_ref(id)
+            .map(|session| session.title.clone())
+            .filter(|title| !title.is_empty())
+            .unwrap_or_else(|| "Riterm".to_string())
+    }
+
+    fn process_triggers(&mut self, session_id: u64, bytes: &[u8]) {
+        if self.compiled_triggers.is_empty() {
+            return;
+        }
+        let lines = self
+            .trigger_scanners
+            .entry(session_id)
+            .or_default()
+            .push(bytes);
+        if lines.is_empty() {
+            return;
+        }
+
+        let mut fired = Vec::new();
+        for line in &lines {
+            for (index, trigger) in self.compiled_triggers.iter().enumerate() {
+                if trigger.regex.is_match(line) {
+                    fired.push((index, trigger.action, trigger.text.clone(), line.clone()));
+                }
+            }
+        }
+
+        for (index, action, text, line) in fired {
+            let now = Instant::now();
+            if self
+                .trigger_last_fired
+                .get(&(session_id, index))
+                .is_some_and(|last| now.duration_since(*last) < Duration::from_secs(2))
+            {
+                continue;
+            }
+            self.trigger_last_fired.insert((session_id, index), now);
+
+            match action {
+                riterm_config::TriggerAction::Notify => {
+                    let title = self.session_title(session_id);
+                    let body = text.unwrap_or_else(|| {
+                        let line = line.trim();
+                        let mut body: String = line.chars().take(180).collect();
+                        if line.chars().count() > 180 {
+                            body.push('…');
+                        }
+                        body
+                    });
+                    notifications::send(&notification_summary(&title), &body);
+                }
+                riterm_config::TriggerAction::Bell => {
+                    if let Some(index) = self
+                        .tabs
+                        .iter()
+                        .position(|tab| tab.sessions.contains_key(&session_id))
+                    {
+                        self.tabs[index].bell = true;
+                    }
+                    if let Some(window) = &self.window {
+                        window.request_user_attention(Some(UserAttentionType::Informational));
+                    }
+                    self.request_redraw();
+                }
+            }
+        }
+    }
+
+    fn notify_command_finished(&mut self, session_id: u64) {
+        let notified = self.notified_epochs.get(&session_id).copied().unwrap_or(0);
+        let Some(session) = self.find_session_ref(session_id) else {
+            return;
+        };
+        let epoch = session.command_finished_epoch;
+        if epoch == 0 || epoch <= notified {
+            return;
+        }
+
+        let exit = session.last_exit_code;
+        let failed = exit.is_some_and(|code| code != 0);
+        let duration = session
+            .marks
+            .iter()
+            .rposition(|mark| mark.kind == MarkKind::CommandFinished)
+            .and_then(|finish_index| {
+                let finish = &session.marks[finish_index];
+                session.marks[..finish_index]
+                    .iter()
+                    .rev()
+                    .find(|mark| mark.kind == MarkKind::CommandStart)
+                    .map(|start| finish.at.saturating_duration_since(start.at))
+            })
+            .unwrap_or_default();
+        let title = session.title.clone();
+
+        // Record the epoch even when notifications are disabled or the window
+        // is focused, so an old completion is never replayed later.
+        self.notified_epochs.insert(session_id, epoch);
+
+        let (enabled, min_seconds) = {
+            let general = &self.config.general;
+            (
+                general.notifications && general.notify_on_command_finish,
+                general.notification_min_seconds,
+            )
+        };
+        if !enabled || self.focused {
+            return;
+        }
+        if !failed && duration < Duration::from_secs_f32(min_seconds.max(0.0)) {
+            return;
+        }
+
+        let summary = notification_summary(&title);
+        let status = match exit {
+            Some(code) if code != 0 => format!("Command failed (exit {code})"),
+            _ => "Command finished".to_string(),
+        };
+        notifications::send(
+            &summary,
+            &format!("{status} in {}", human_duration(duration)),
+        );
     }
 
     fn restart_cursor_blink(&mut self) {
@@ -379,6 +518,10 @@ impl App {
         let target = tab.active;
         let new_layout = tab.layout.remove_leaf(target);
         tab.sessions.remove(&target);
+        self.trigger_scanners.remove(&target);
+        self.notified_epochs.remove(&target);
+        self.trigger_last_fired
+            .retain(|(session, _), _| *session != target);
         if let Some(renderer) = self.renderer.as_mut() {
             renderer.remove_session(target);
         }
@@ -1216,6 +1359,13 @@ impl App {
                 if let Some(window) = &self.window {
                     window.request_user_attention(Some(UserAttentionType::Informational));
                 }
+                if self.config.general.notifications
+                    && self.config.general.notify_on_bell
+                    && !self.focused
+                {
+                    let title = self.session_title(id);
+                    notifications::send(&notification_summary(&title), "Bell");
+                }
                 self.request_redraw();
             }
             TermEvent::Exit => self.close_session(id, event_loop),
@@ -1757,6 +1907,7 @@ impl ApplicationHandler<UserEvent> for App {
     fn user_event(&mut self, event_loop: &ActiveEventLoop, event: UserEvent) {
         match event {
             UserEvent::Session(id, SessionEvent::Bytes(data)) => {
+                self.process_triggers(id, &data);
                 let mut tab_index = None;
                 for (index, tab) in self.tabs.iter_mut().enumerate() {
                     if let Some(session) = tab.sessions.get_mut(&id) {
@@ -1770,6 +1921,7 @@ impl ApplicationHandler<UserEvent> for App {
                     if failed && index != self.active_tab {
                         self.tabs[index].bell = true;
                     }
+                    self.notify_command_finished(id);
                 }
                 self.request_redraw();
             }
@@ -1823,6 +1975,26 @@ impl ApplicationHandler<UserEvent> for App {
 fn anchored_mark_point(mark: &Mark, history: usize) -> Point {
     let line = mark.point.line.0 + mark.history_size as i32 - history as i32;
     Point::new(Line(line), mark.point.column)
+}
+
+fn notification_summary(title: &str) -> String {
+    let title = title.trim();
+    if title.is_empty() || title == "Riterm" {
+        "Riterm".to_string()
+    } else {
+        format!("Riterm — {title}")
+    }
+}
+
+fn human_duration(duration: Duration) -> String {
+    let seconds = duration.as_secs_f32();
+    if seconds < 1.0 {
+        format!("{:.0} ms", seconds * 1000.0)
+    } else if seconds < 60.0 {
+        format!("{seconds:.1}s")
+    } else {
+        format!("{}m {:02}s", seconds as u64 / 60, seconds as u64 % 60)
+    }
 }
 
 fn open_url(url: &str) {
@@ -1930,10 +2102,12 @@ fn _typecheck(_: Key) {}
 
 #[cfg(test)]
 mod tests {
-    use super::{anchored_mark_point, observe_finished_commands};
+    use super::{
+        anchored_mark_point, human_duration, notification_summary, observe_finished_commands,
+    };
     use alacritty_terminal::index::{Column, Line, Point};
     use riterm_core::{Mark, MarkKind};
-    use std::time::Instant;
+    use std::time::{Duration, Instant};
 
     #[test]
     fn marks_stay_anchored_as_history_grows() {
@@ -1946,6 +2120,16 @@ mod tests {
         // Content moves up by four lines while history grows by four.
         let point = anchored_mark_point(&mark, 24);
         assert_eq!(point, Point::new(Line(-7), Column(7)));
+    }
+
+    #[test]
+    fn formats_notification_text() {
+        assert_eq!(notification_summary(""), "Riterm");
+        assert_eq!(notification_summary("Riterm"), "Riterm");
+        assert_eq!(notification_summary("build"), "Riterm — build");
+        assert_eq!(human_duration(Duration::from_millis(250)), "250 ms");
+        assert_eq!(human_duration(Duration::from_millis(1500)), "1.5s");
+        assert_eq!(human_duration(Duration::from_secs(125)), "2m 05s");
     }
 
     #[test]
