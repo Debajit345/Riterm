@@ -3,6 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
+use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
@@ -614,6 +615,34 @@ impl Renderer {
             if let Some(start) = run_start {
                 self.flush_run(inner, metrics, row, start, session.size.cols, run_color);
             }
+        }
+
+        // Scroll position indicator, drawn while scrolled back.
+        let history = term.grid().history_size();
+        if history > 0 {
+            let track = Rect::new(
+                inner.right() - 3.0 * self.scale as f32,
+                inner.y,
+                3.0 * self.scale as f32,
+                inner.h,
+            );
+            self.push_quad(track, profile.foreground, 0.10);
+            let total = history + session.size.rows;
+            let thumb_h = (inner.h * session.size.rows as f32 / total as f32)
+                .max(24.0 * self.scale as f32)
+                .min(inner.h);
+            let progress = display_offset as f32 / history as f32;
+            let y = inner.y + (1.0 - progress) * (inner.h - thumb_h);
+            self.push_quad(
+                Rect::new(
+                    inner.right() - 4.0 * self.scale as f32,
+                    y,
+                    4.0 * self.scale as f32,
+                    thumb_h,
+                ),
+                profile.cursor,
+                0.55,
+            );
         }
 
         // Search hits are translucent overlays. The current hit is also the
@@ -1525,12 +1554,16 @@ fn build_term_segments(
                     .unwrap_or(false);
             let selected = selection.map(|range| range.contains(abs)).unwrap_or(false);
             let (fg, _) = cell_style(cell, profile, &colors, selected, on_cursor);
+            let is_link = cell.hyperlink().is_some();
+            let link_style = is_link && !selected && !on_cursor;
 
             let style = TextStyle {
-                fg,
+                fg: if link_style { profile.link } else { fg },
                 bold: cell.flags.contains(Flags::BOLD),
                 italic: cell.flags.contains(Flags::ITALIC),
-                underline: if cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
+                underline: if is_link {
+                    UnderlineStyle::Single
+                } else if cell.flags.contains(Flags::DOUBLE_UNDERLINE) {
                     UnderlineStyle::Double
                 } else if cell.flags.intersects(Flags::ALL_UNDERLINES) {
                     UnderlineStyle::Single

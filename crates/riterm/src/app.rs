@@ -118,6 +118,7 @@ pub struct App {
     current_title: String,
     cursor_blink_on: bool,
     cursor_blink_next: Instant,
+    last_click: Option<(Instant, PhysicalPosition<f64>, u8)>,
     search: Option<SearchState>,
     copy_mode: Option<CopyState>,
 }
@@ -159,6 +160,7 @@ impl App {
             current_title: String::new(),
             cursor_blink_on: true,
             cursor_blink_next: Instant::now() + Duration::from_millis(500),
+            last_click: None,
             search: None,
             copy_mode: None,
         }
@@ -1316,6 +1318,9 @@ impl App {
         self.exit_copy_mode(false);
         let x = self.mouse_position.x;
         let y = self.mouse_position.y;
+        let middle_text = (button == MouseButton::Middle && self.config.general.middle_click_paste)
+            .then(|| self.get_clipboard())
+            .flatten();
 
         if y < self.tab_bar_height() as f64 {
             if button == MouseButton::Left {
@@ -1371,11 +1376,54 @@ impl App {
             return;
         }
 
-        if button == MouseButton::Left {
-            let Some(point) = Self::mouse_cell(padding, session, rect, x, y, cell_w, cell_h) else {
+        if button == MouseButton::Middle {
+            if let Some(text) = middle_text {
+                session.scroll_to_bottom();
+                let bracketed = session.term.mode().contains(TermMode::BRACKETED_PASTE);
+                session.write(paste_bytes(&text, bracketed));
+                self.request_redraw();
+            }
+            return;
+        }
+
+        let Some(point) = Self::mouse_cell(padding, session, rect, x, y, cell_w, cell_h) else {
+            return;
+        };
+
+        if button == MouseButton::Left && self.modifiers.control_key() {
+            let link = session.term.grid()[point]
+                .hyperlink()
+                .map(|link| link.uri().to_string())
+                .or_else(|| search::url_at(&session.term, point));
+            if let Some(url) = link {
+                open_url(&url);
                 return;
+            }
+        }
+
+        if button == MouseButton::Left {
+            let now = Instant::now();
+            let count = match self.last_click {
+                Some((then, position, count))
+                    if now.duration_since(then) < Duration::from_millis(400)
+                        && (position.x - x).abs() < 6.0
+                        && (position.y - y).abs() < 6.0 =>
+                {
+                    if count >= 3 {
+                        1
+                    } else {
+                        count + 1
+                    }
+                }
+                _ => 1,
             };
-            session.term.selection = Some(Selection::new(SelectionType::Simple, point, Side::Left));
+            self.last_click = Some((now, self.mouse_position, count));
+            let selection_type = match count {
+                2 => SelectionType::Semantic,
+                3 => SelectionType::Lines,
+                _ => SelectionType::Simple,
+            };
+            session.term.selection = Some(Selection::new(selection_type, point, Side::Left));
             self.drag = Some(DragSelection {
                 session_id,
                 start: point,
@@ -1644,6 +1692,19 @@ impl ApplicationHandler<UserEvent> for App {
             self.request_redraw();
         }
         event_loop.set_control_flow(ControlFlow::WaitUntil(self.cursor_blink_next));
+    }
+}
+
+fn open_url(url: &str) {
+    let lower = url.to_ascii_lowercase();
+    if !["http://", "https://", "ftp://", "file://", "mailto:"]
+        .iter()
+        .any(|scheme| lower.starts_with(scheme))
+    {
+        return;
+    }
+    if let Err(err) = std::process::Command::new("xdg-open").arg(url).spawn() {
+        warn!("could not open {url:?}: {err}");
     }
 }
 

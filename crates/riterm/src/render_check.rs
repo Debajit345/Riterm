@@ -29,6 +29,12 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
     let mut alternate = spawn_scratch_session(2, sink)?;
     primary.feed(&primary_screen());
     alternate.feed(&secondary_screen());
+    if std::env::var_os("RITERM_RENDER_SCROLLBACK").is_some() {
+        for line in 0..40 {
+            primary.feed(format!("scrollback line {line}\r\n").as_bytes());
+        }
+        primary.scroll(38);
+    }
 
     renderer.cancel_frame();
 
@@ -140,6 +146,7 @@ fn primary_screen() -> Vec<u8> {
         "\x1b[1mbold default\x1b[0m  \x1b[1;31mbold ANSI red\x1b[0m  \x1b[3mitalic\x1b[0m  \x1b[4munderline\x1b[0m  \x1b[9mstrike\x1b[0m  \x1b[2mdim\x1b[0m  \x1b[7mreverse\x1b[0m\r\n",
     );
     s.push_str("Unicode: Ελληνικά Кириллица 日本語 中文 한글 العربية ← ↑ → ↓ ✓ ★ ♥ 😀 🚀 👩‍💻\r\n");
+    s.push_str("OSC 8: \x1b]8;;https://github.com/Debajit345/Riterm\x1b\\Riterm on GitHub\x1b]8;;\x1b\\\r\n");
     s.push_str("ANSI  ");
     for index in 0..16 {
         s.push_str(&format!("\x1b[48;5;{index}m  \x1b[0m"));

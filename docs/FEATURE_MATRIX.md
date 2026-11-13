@@ -32,7 +32,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Minimum contrast | Yes | ✅ iTerm2's perceived-brightness algorithm |
 | Cursor guide | Yes | 🟡 color parsed, guide rendering not exposed yet |
 | Sixel / inline images | iTerm2 image protocol and sixel | ⏳ |
-| OSC 8 hyperlinks | Yes | 🟡 parsed/rendered as text; click handling planned |
+| OSC 8 hyperlinks | Yes | ✅ link color/underline and `Ctrl+click` open |
 | OSC 52 clipboard | Yes | ✅ via terminal events |
 | Title changes | Yes | ✅ |
 | Bell / attention | Visual and audible options | 🟡 system attention request and tab dot; no sound or configurable visual flash |
@@ -104,12 +104,12 @@ It is a roadmap document, not a claim of parity. Status values:
 | Drag selection | Yes | ✅ |
 | Copy / paste | Yes | ✅ |
 | Copy on select | Optional | ✅ `[general].copy_on_select` |
-| Block / semantic / line selection | Yes | 🟡 simple mouse selection and copy-mode keyboard selection; block/semantic modes planned |
-| Middle-click paste | Configurable | ⏳ |
+| Block / semantic / line selection | Yes | ✅ drag, double-click word, triple-click line, copy-mode selection; block mode planned |
+| Middle-click paste | Configurable | ✅ `[general].middle_click_paste` |
 | Search scrollback | Yes | ✅ case-insensitive, full scrollback, next/previous |
 | Copy mode (vi keys) | Yes | ✅ motions, keyboard selection, yank |
 | Autocomplete / suggestions | Yes | ⏳ |
-| Word/URL click actions | Yes | ⏳ |
+| Word/URL click actions | Yes | ✅ `Ctrl+click` opens detected URLs |
 
 ## Windows and desktop integration
 

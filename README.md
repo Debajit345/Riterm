@@ -41,6 +41,9 @@ and configuration formats.
   count, next/previous navigation, and highlighted hits.
 - **Copy mode** with vi-style motions (`h j k l`, `w b e`, `0 $`, `g G`),
   keyboard selection, and yank to the clipboard.
+- **Pointer workflow**: double-click selects a word, triple-click selects a
+  line, middle-click pastes, and `Ctrl+click` opens OSC 8 hyperlinks or URLs.
+  A scrollbar appears while you are scrolled back.
 - **Terminal core** from `alacritty_terminal`: full VT/ANSI parsing, scrollback,
   alternate screen, bracketed paste, mouse reporting, OSC clipboard and title
   handling.
@@ -128,6 +131,7 @@ scrollback = 1000
 tab_bar_height = 30.0
 padding = 6.0
 copy_on_select = false
+middle_click_paste = true
 theme = "Smoooooth"          # any preset from --list-themes, or a file path
 theme_variant = "dark"       # dark | light | auto
 # shell = "/bin/zsh"
@@ -192,6 +196,9 @@ then `COLORFGBG`, then dark.
 | `Ctrl+Shift+C` / `Ctrl+Shift+V` | Copy selection / paste |
 | `Ctrl+=` / `Ctrl+-` / `Ctrl+0` | Zoom in / out / reset |
 | `Shift+PageUp` / `Shift+PageDown` | Scroll page up / down |
+| Double-click / triple-click | Select word / line |
+| Middle-click | Paste clipboard |
+| `Ctrl+click` link | Open URL in the default browser |
 | `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Scroll to top / bottom |
 | `Ctrl+Shift+K` | Clear scrollback |
 | `Ctrl+F` | Search scrollback |

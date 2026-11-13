@@ -152,7 +152,14 @@ Search hits are drawn as translucent selection-colored quads before the text
 pass; the current hit is also installed as the terminal selection so it uses
 the exact selection and selected-text colors. Copy mode draws a hollow cursor
 at its vi-style position and reuses the terminal selection while an anchor is
-active.
+active. When the grid has scrollback history, a thin scrollbar track and thumb
+are drawn at the right edge of the pane.
+
+OSC 8 hyperlinks are stored by the terminal core in each cell and rendered in
+the profile's link color with an underline. `Ctrl+click` resolves the cell's
+hyperlink first, then scans the line for an `http(s)://`, `ftp://`, or
+`file://` URL, and opens it with `xdg-open`. Middle-click paste and
+double/triple-click word/line selection are handled in the mouse path.
 
 Ligatures are not forced on: ASCII runs use basic shaping so columns stay
 aligned. Feature tags in `font_features` are passed to shaping, but ligature

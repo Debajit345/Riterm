@@ -182,3 +182,117 @@ mod tests {
         assert!(find_in_folded(&folded, &[], Line(0), 1).is_empty());
     }
 }
+
+/// Find a URL or OSC 8 hyperlink under a grid point.
+///
+/// OSC 8 metadata wins over plain-text detection. Plain URLs are recognised
+/// when they start with `http://`, `https://`, `ftp://`, `file://`, or
+/// `www.`, and trailing punctuation is stripped.
+pub fn url_at<T: EventListener>(term: &Term<T>, point: Point) -> Option<String> {
+    let grid = term.grid();
+    let cell = &grid[point];
+    if let Some(link) = cell.hyperlink() {
+        return Some(link.uri().to_string());
+    }
+
+    let columns = grid.columns();
+    let mut text = String::new();
+    let mut column_bytes = Vec::with_capacity(columns);
+    for column in 0..columns {
+        let cell = &grid[Point::new(point.line, Column(column))];
+        if cell.flags.contains(Flags::WIDE_CHAR_SPACER) {
+            continue;
+        }
+        let start = text.len();
+        text.push(if cell.c.is_control() { ' ' } else { cell.c });
+        column_bytes.push((start, column));
+    }
+
+    let mut token_start = 0;
+    let bytes = text.as_bytes();
+    for index in 0..=bytes.len() {
+        let boundary = index == bytes.len() || bytes[index].is_ascii_whitespace();
+        if !boundary {
+            continue;
+        }
+        if token_start < index {
+            let token = &text[token_start..index];
+            let range = token_start..index;
+            let contains_point = column_bytes.iter().any(|(start, column)| {
+                *column == point.column.0 && *start >= range.start && *start < range.end
+            });
+            if contains_point {
+                if let Some(url) = normalize_url(token) {
+                    return Some(url);
+                }
+            }
+        }
+        token_start = index + 1;
+    }
+    None
+}
+
+fn normalize_url(token: &str) -> Option<String> {
+    let mut token = token.trim_start_matches(|ch: char| {
+        matches!(
+            ch,
+            '\'' | '"' | '`' | '<' | '>' | '(' | ')' | '[' | ']' | '{' | '}'
+        )
+    });
+    while let Some(ch) = token.chars().last() {
+        if matches!(
+            ch,
+            '.' | ','
+                | ';'
+                | ':'
+                | '!'
+                | '?'
+                | '\''
+                | '"'
+                | '`'
+                | '<'
+                | '>'
+                | '('
+                | ')'
+                | '['
+                | ']'
+                | '{'
+                | '}'
+        ) {
+            token = &token[..token.len() - ch.len_utf8()];
+        } else {
+            break;
+        }
+    }
+    let lower = token.to_ascii_lowercase();
+    let prefix = ["http://", "https://", "ftp://", "file://"]
+        .into_iter()
+        .find(|prefix| lower.starts_with(prefix))?;
+    if token.len() <= prefix.len() {
+        return None;
+    }
+    Some(token.to_string())
+}
+
+#[cfg(test)]
+mod url_tests {
+    use super::normalize_url;
+
+    #[test]
+    fn accepts_web_urls() {
+        assert_eq!(
+            normalize_url("https://example.com/path?q=1"),
+            Some("https://example.com/path?q=1".into())
+        );
+        assert_eq!(
+            normalize_url("http://example.com)."),
+            Some("http://example.com".into())
+        );
+    }
+
+    #[test]
+    fn rejects_plain_text() {
+        assert_eq!(normalize_url("example.com"), None);
+        assert_eq!(normalize_url("file://"), None);
+    }
+}

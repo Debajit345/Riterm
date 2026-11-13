@@ -53,6 +53,8 @@ pub struct General {
     pub padding: f32,
     /// Copy the selection to the clipboard when the mouse is released.
     pub copy_on_select: bool,
+    /// Paste the clipboard on middle click.
+    pub middle_click_paste: bool,
     /// Built-in iTerm2 preset name or path to an `.itermcolors` file.
     pub theme: Option<String>,
     /// Which appearance variant of the theme to use.
@@ -70,6 +72,7 @@ impl Default for General {
             tab_bar_height: 30.0,
             padding: 6.0,
             copy_on_select: false,
+            middle_click_paste: true,
             theme: None,
             theme_variant: ThemeMode::Dark,
         }
@@ -449,6 +452,7 @@ scrollback = 1000
 tab_bar_height = 30.0
 padding = 6.0
 copy_on_select = false
+middle_click_paste = true
 theme_variant = "dark"
 # theme = "Smoooooth"
 # shell = "/bin/zsh"

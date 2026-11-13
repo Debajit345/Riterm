@@ -39,7 +39,7 @@ Target: replace a normal terminal for everyday work.
 
 - [x] Search scrollback with incremental highlighting
 - [x] Copy mode with vi-style navigation and keyboard selection
-- [ ] Scrollbar / scroll position indicator
+- [x] Scrollbar / scroll position indicator
 - [x] Cursor blinking (`cursor_blink`, iTerm2's 0.5 s phase)
 - [ ] Per-profile key mappings and modifier remapping
 - [ ] Window transparency, background image, blur (where compositor allows)
@@ -49,8 +49,8 @@ Target: replace a normal terminal for everyday work.
 - [ ] Config hot reload (`notify`)
 - [ ] Better PTY I/O: `poll(2)`/`epoll` instead of sleep polling
 - [x] Cell-accurate fallback for missing glyphs; color emoji renders
-- [ ] OSC 8 link hit-testing and open-in-browser
-- [ ] Word/URL selection and middle-click paste
+- [x] OSC 8 link hit-testing and open-in-browser
+- [x] Word/URL selection and middle-click paste
 - [ ] Notifications with command-finished summaries
 
 ## Milestone 3 — iTerm2 power features
