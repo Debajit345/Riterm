@@ -6,6 +6,7 @@ use std::io::Write as _;
 use std::path::Path;
 use std::sync::Arc;
 
+use alacritty_terminal::index::{Column, Line, Point};
 use anyhow::{Context, Result};
 use riterm_config::{Config, ItermColors, ResolvedProfile, ThemeVariant};
 use riterm_core::{Session, SessionConfig, SessionSink};
@@ -63,13 +64,39 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
     let left = Rect::new(0.0, content_top, split - 1.0, content_height);
     let right = Rect::new(split, content_top, width as f32 - split, content_height);
 
-    renderer.prepare_session(&mut primary, left, &profile, PADDING, true);
-    renderer.prepare_session(&mut alternate, right, &secondary, PADDING, false);
+    let show_search = std::env::var_os("RITERM_RENDER_SEARCH").is_some();
+    let highlights = if show_search {
+        vec![(
+            Point::new(Line(2), Column(0)),
+            Point::new(Line(2), Column(11)),
+        )]
+    } else {
+        Vec::new()
+    };
+    renderer.prepare_session(
+        &mut primary,
+        left,
+        &profile,
+        PADDING,
+        true,
+        &highlights,
+        None,
+    );
+    renderer.prepare_session(&mut alternate, right, &secondary, PADDING, false, &[], None);
     renderer.push_quad(
         Rect::new(split - 1.0, content_top, 1.0, content_height),
         profile.foreground.mix(profile.background, 0.72),
         1.0,
     );
+
+    if show_search {
+        renderer.prepare_overlay(
+            "Find: Riterm    1/4 · Enter next · Shift+Enter previous · Esc close",
+            &profile,
+            Rect::new(8.0, height as f32 - 36.0, width as f32 - 16.0, 28.0),
+            profile.cursor,
+        );
+    }
 
     let pixels = renderer.render_offscreen(profile.background)?;
     write_png(path, width, height, &pixels)?;

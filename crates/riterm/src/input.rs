@@ -29,6 +29,10 @@ pub enum Action {
     ScrollTop,
     ScrollBottom,
     ClearScrollback,
+    Search,
+    SearchNext,
+    SearchPrev,
+    CopyMode,
 }
 
 impl Action {
@@ -58,6 +62,10 @@ impl Action {
                 "scroll_top" => ScrollTop,
                 "scroll_bottom" => ScrollBottom,
                 "clear_scrollback" => ClearScrollback,
+                "search" | "find" => Search,
+                "search_next" | "find_next" => SearchNext,
+                "search_prev" | "find_prev" => SearchPrev,
+                "copy_mode" => CopyMode,
                 // `select_tab_1` .. `select_tab_9`
                 other => {
                     let index = other.strip_prefix("select_tab_")?.parse::<usize>().ok()?;
@@ -100,6 +108,10 @@ pub fn default_bindings() -> HashMap<String, Action> {
     add("ctrl+shift+home", ScrollTop);
     add("ctrl+shift+end", ScrollBottom);
     add("ctrl+shift+k", ClearScrollback);
+    add("ctrl+f", Search);
+    add("f3", SearchNext);
+    add("shift+f3", SearchPrev);
+    add("ctrl+shift+space", CopyMode);
     map
 }
 

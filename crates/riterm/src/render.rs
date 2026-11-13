@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::sync::Arc;
 
-use alacritty_terminal::index::Column;
+use alacritty_terminal::index::{Column, Point};
 use alacritty_terminal::term::cell::{Cell, Flags};
 use alacritty_terminal::term::color::Colors;
 use alacritty_terminal::term::{TermMode, point_to_viewport, viewport_to_point};
@@ -95,6 +95,7 @@ pub struct FontMetrics {
 enum AreaKind {
     Session { id: u64, segment: usize },
     TabBar,
+    Overlay,
 }
 
 #[derive(Clone, Debug)]
@@ -162,6 +163,7 @@ pub struct Renderer {
 
     session_buffers: HashMap<u64, SessionBuffer>,
     tab_buffer: Option<Buffer>,
+    overlay_buffer: Option<Buffer>,
     metrics_cache: HashMap<FontKey, FontMetrics>,
     families_cache: HashMap<u64, ResolvedFamilies>,
     cursor_visible: bool,
@@ -298,6 +300,7 @@ impl Renderer {
             text_specs: Vec::new(),
             session_buffers: HashMap::new(),
             tab_buffer: None,
+            overlay_buffer: None,
             metrics_cache: HashMap::new(),
             families_cache: HashMap::new(),
             cursor_visible: true,
@@ -442,6 +445,7 @@ impl Renderer {
         });
     }
 
+    #[allow(clippy::too_many_arguments)]
     pub fn prepare_session(
         &mut self,
         session: &mut Session,
@@ -449,6 +453,8 @@ impl Renderer {
         profile: &ResolvedProfile,
         padding_logical: f32,
         focused: bool,
+        highlights: &[(Point, Point)],
+        copy_cursor: Option<Point>,
     ) {
         let metrics = self.metrics_for(profile, self.scale);
         let padding = (padding_logical * self.scale as f32).max(0.0);
@@ -506,7 +512,15 @@ impl Renderer {
             session.dirty = false;
         }
 
-        self.append_cell_quads(session, inner, metrics, profile, focused);
+        self.append_cell_quads(
+            session,
+            inner,
+            metrics,
+            profile,
+            focused,
+            highlights,
+            copy_cursor,
+        );
 
         let mut specs = Vec::new();
         if let Some(buffer) = self.session_buffers.get(&session.id) {
@@ -534,6 +548,7 @@ impl Renderer {
         self.text_specs.extend(specs);
     }
 
+    #[allow(clippy::too_many_arguments)]
     fn append_cell_quads(
         &mut self,
         session: &Session,
@@ -541,6 +556,8 @@ impl Renderer {
         metrics: FontMetrics,
         profile: &ResolvedProfile,
         focused: bool,
+        highlights: &[(Point, Point)],
+        copy_cursor: Option<Point>,
     ) {
         let term = &session.term;
         let mode = *term.mode();
@@ -596,6 +613,61 @@ impl Renderer {
             }
             if let Some(start) = run_start {
                 self.flush_run(inner, metrics, row, start, session.size.cols, run_color);
+            }
+        }
+
+        // Search hits are translucent overlays. The current hit is also the
+        // terminal selection and gets the full selection colors.
+        for (start, end) in highlights {
+            let viewport_start = point_to_viewport(display_offset, *start);
+            let viewport_end = point_to_viewport(display_offset, *end);
+            let (Some(start), Some(end)) = (viewport_start, viewport_end) else {
+                continue;
+            };
+            for line in start.line..=end.line {
+                if line >= session.size.rows {
+                    break;
+                }
+                let first = if line == start.line {
+                    start.column.0
+                } else {
+                    0
+                };
+                let last = if line == end.line {
+                    (end.column.0 + 1).min(session.size.cols)
+                } else {
+                    session.size.cols
+                };
+                if last > first {
+                    self.push_quad(
+                        Rect::new(
+                            inner.x + first as f32 * metrics.cell_w,
+                            inner.y + line as f32 * metrics.cell_h,
+                            (last - first) as f32 * metrics.cell_w,
+                            metrics.cell_h,
+                        ),
+                        profile.selection,
+                        0.32,
+                    );
+                }
+            }
+        }
+
+        if let Some(copy_cursor) = copy_cursor {
+            if let Some(point) = point_to_viewport(display_offset, copy_cursor) {
+                if point.line < session.size.rows && point.column < session.size.cols {
+                    let x = inner.x + point.column.0 as f32 * metrics.cell_w;
+                    let y = inner.y + point.line as f32 * metrics.cell_h;
+                    let thickness = (metrics.cell_w * 0.10).clamp(1.0, 2.0);
+                    for rect in [
+                        Rect::new(x, y, metrics.cell_w, thickness),
+                        Rect::new(x, y + metrics.cell_h - thickness, metrics.cell_w, thickness),
+                        Rect::new(x, y, thickness, metrics.cell_h),
+                        Rect::new(x + metrics.cell_w - thickness, y, thickness, metrics.cell_h),
+                    ] {
+                        self.push_quad(rect, profile.cursor, 0.9);
+                    }
+                }
             }
         }
 
@@ -680,6 +752,56 @@ impl Renderer {
             color,
             1.0,
         );
+    }
+
+    /// Draw a one-line status/search prompt at the bottom of `rect`.
+    pub fn prepare_overlay(
+        &mut self,
+        text: &str,
+        profile: &ResolvedProfile,
+        rect: Rect,
+        accent: Rgb,
+    ) {
+        if rect.w < 8.0 || rect.h < 8.0 {
+            return;
+        }
+        let metrics = self.metrics_for(profile, self.scale);
+        let font_px = (metrics.font_px * 0.86).max(8.0);
+        let overlay_metrics = Metrics::new(font_px, (font_px * 1.35).max(font_px));
+        let families = self.families_for(profile);
+        let family = family_of(families.primary.as_deref());
+        let features = parse_font_features(profile);
+        let padding = 10.0 * self.scale as f32;
+        let max_chars =
+            (((rect.w - padding * 2.0) / (metrics.cell_w * 0.86).max(1.0)).floor() as usize).max(4);
+        let mut line: String = text.chars().take(max_chars).collect();
+        if text.chars().count() > max_chars {
+            line.pop();
+            line.push('…');
+        }
+
+        let bar_bg = profile.background.mix(profile.foreground, 0.10);
+        self.push_quad(rect, bar_bg, 0.97);
+        self.push_quad(Rect::new(rect.x, rect.y, rect.w, 1.0), accent, 0.9);
+
+        let attrs = Attrs::new()
+            .family(family)
+            .color(color(profile.foreground))
+            .font_features(features);
+        let mut buffer = Buffer::new(&mut self.font_system, overlay_metrics);
+        buffer.set_size(Some(rect.w.max(1.0)), Some(rect.h.max(1.0)));
+        buffer.set_text(&line, &attrs, Shaping::Basic, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.overlay_buffer = Some(buffer);
+
+        let text_top = rect.y + (rect.h - overlay_metrics.line_height) / 2.0;
+        self.text_specs.push(AreaSpec {
+            kind: AreaKind::Overlay,
+            left: rect.x + padding,
+            top: text_top.max(rect.y),
+            bounds: text_bounds(rect),
+            default_color: color(profile.foreground),
+        });
     }
 
     pub fn prepare_tab_bar(&mut self, tabs: &[TabInfo], profile: &ResolvedProfile, rect: Rect) {
@@ -992,6 +1114,7 @@ impl Renderer {
         {
             let buffers = &self.session_buffers;
             let tab_buffer = self.tab_buffer.as_ref();
+            let overlay_buffer = self.overlay_buffer.as_ref();
             let areas = self.text_specs.iter().filter_map(|spec| {
                 let buffer = match spec.kind {
                     AreaKind::Session { id, segment } => buffers
@@ -999,6 +1122,7 @@ impl Renderer {
                         .and_then(|buffer| buffer.segments.get(segment))
                         .map(|segment| &segment.buffer),
                     AreaKind::TabBar => tab_buffer,
+                    AreaKind::Overlay => overlay_buffer,
                 }?;
                 Some(TextArea {
                     buffer,

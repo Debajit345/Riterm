@@ -37,8 +37,8 @@ Remaining MVP limitations:
 
 Target: replace a normal terminal for everyday work.
 
-- [ ] Search scrollback with incremental highlighting
-- [ ] Copy mode with vi-style navigation and keyboard selection
+- [x] Search scrollback with incremental highlighting
+- [x] Copy mode with vi-style navigation and keyboard selection
 - [ ] Scrollbar / scroll position indicator
 - [x] Cursor blinking (`cursor_blink`, iTerm2's 0.5 s phase)
 - [ ] Per-profile key mappings and modifier remapping

@@ -5,6 +5,7 @@ mod input;
 mod layout;
 mod render;
 mod render_check;
+mod search;
 mod shell_install;
 
 use std::path::PathBuf;

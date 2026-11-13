@@ -4,16 +4,16 @@
 
 It brings the parts of iTerm2 that matter day-to-day to Wayland and X11:
 GPU-accelerated rendering, tabs and recursive splits, named profiles, iTerm2's
-built-in color presets and profile import, font fallback, and
-iTerm2-compatible OSC 133 shell integration. It is not a macOS app port; it is
-a native Linux terminal that speaks iTerm2's protocols and configuration
-formats.
+built-in color presets and profile import, font fallback, scrollback search,
+vi-style copy mode, and iTerm2-compatible OSC 133 shell integration. It is not
+a macOS app port; it is a native Linux terminal that speaks iTerm2's protocols
+and configuration formats.
 
 ![Riterm rendering iTerm2 Smoooooth and Solarized Dark profiles](docs/screenshot.png)
 
 > **Status: early, usable, and expanding.** The terminal, tabs, splits,
-> profiles, built-in themes, font fallback, cursor blinking, imports, and shell
-> integration work. Search, copy mode, tmux control mode, triggers, inline
+> profiles, built-in themes, font fallback, cursor blinking, imports, search,
+> copy mode, and shell integration work. tmux control mode, triggers, inline
 > images, and scripting are on the roadmap. See
 > [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) and
 > [docs/ROADMAP.md](docs/ROADMAP.md).
@@ -35,7 +35,12 @@ formats.
   algorithm.
 - **GPU rendering** with `wgpu` and `glyphon`: true color, bold, italic,
   underline, double underline, strikethrough, wide characters, block/beam/
-  underline/hollow cursors, blinking cursor, selection, and a live tab bar.
+  underline/hollow cursors, blinking cursor, selection, search highlights, and
+  a live tab bar.
+- **Scrollback search** over the whole buffer, case-insensitive, with match
+  count, next/previous navigation, and highlighted hits.
+- **Copy mode** with vi-style motions (`h j k l`, `w b e`, `0 $`, `g G`),
+  keyboard selection, and yank to the clipboard.
 - **Terminal core** from `alacritty_terminal`: full VT/ANSI parsing, scrollback,
   alternate screen, bracketed paste, mouse reporting, OSC clipboard and title
   handling.
@@ -189,6 +194,10 @@ then `COLORFGBG`, then dark.
 | `Shift+PageUp` / `Shift+PageDown` | Scroll page up / down |
 | `Ctrl+Shift+Home` / `Ctrl+Shift+End` | Scroll to top / bottom |
 | `Ctrl+Shift+K` | Clear scrollback |
+| `Ctrl+F` | Search scrollback |
+| `F3` / `Shift+F3` | Next / previous search match |
+| `Ctrl+Shift+Space` | Toggle copy mode |
+| `Esc` | Close search or copy mode |
 
 Override or add bindings in `config.toml`:
 
@@ -200,6 +209,10 @@ Override or add bindings in `config.toml`:
 ```
 
 Action names are listed in `crates/riterm/src/input.rs` (`Action::from_name`).
+
+In copy mode: `h j k l` move, `w b e` word motions, `0 $` line start/end,
+`g G` scrollback top/bottom, `v` or `Space` toggle selection, `y` or `Enter`
+yank and exit, `q` or `Esc` exit. `Ctrl+U/D/F/B` scroll by pages.
 
 ## Shell integration
 

@@ -104,10 +104,10 @@ It is a roadmap document, not a claim of parity. Status values:
 | Drag selection | Yes | ✅ |
 | Copy / paste | Yes | ✅ |
 | Copy on select | Optional | ✅ `[general].copy_on_select` |
-| Block / semantic / line selection | Yes | ⏳ simple selection only |
+| Block / semantic / line selection | Yes | 🟡 simple mouse selection and copy-mode keyboard selection; block/semantic modes planned |
 | Middle-click paste | Configurable | ⏳ |
-| Search scrollback | Yes | ⏳ |
-| Copy mode (vi keys) | Yes | ⏳ |
+| Search scrollback | Yes | ✅ case-insensitive, full scrollback, next/previous |
+| Copy mode (vi keys) | Yes | ✅ motions, keyboard selection, yank |
 | Autocomplete / suggestions | Yes | ⏳ |
 | Word/URL click actions | Yes | ⏳ |
 

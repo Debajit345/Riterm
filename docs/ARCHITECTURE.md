@@ -7,7 +7,7 @@ riterm/
 ├── crates/
 │   ├── riterm-config/   TOML config, profiles, iTerm2 importers, presets
 │   ├── riterm-core/     PTY sessions, VT state, OSC 133 scanner
-│   └── riterm/          winit app, wgpu renderer, CLI
+│   └── riterm/          winit app, wgpu renderer, search/copy mode, CLI
 ├── shell-integration/   bash/zsh/fish integration scripts
 ├── third_party/iterm2/  copied iTerm2 plists and provenance
 ├── tools/               preset generator
@@ -66,9 +66,13 @@ escape sequences are split across PTY reads.
 - `input.rs` — default keybindings, chord canonicalization, action lookup, key
   encoding for the PTY (application cursor keys, CSI modifiers, function keys),
   bracketed paste.
+- `search.rs` — case-insensitive scrollback search. It folds each grid cell
+  to lowercase, maps matches back to absolute grid points (including negative
+  history lines), and provides vi-style word motions for copy mode.
 - `render.rs` — wgpu device/surface, quad pipeline, glyphon text atlas, font
   family resolution and metrics caches, segment shaping, cell
-  background/selection/cursor rendering, tab bar.
+  background/selection/search-highlight/cursor rendering, tab bar, and the
+  search/copy overlay line.
 - `quads.wgsl` — minimal instanced-free quad shader.
 - `shell_install.rs` — installs scripts and hooks rc files.
 
@@ -143,6 +147,12 @@ Each segment records its row, starting column, cell width, and x offset, and
 gets its own `TextArea` and clipping bounds. The cursor is drawn as a quad;
 block-cursor text is recolored with `Cursor Text Color` and selected text with
 `Selected Text Color`.
+
+Search hits are drawn as translucent selection-colored quads before the text
+pass; the current hit is also installed as the terminal selection so it uses
+the exact selection and selected-text colors. Copy mode draws a hollow cursor
+at its vi-style position and reuses the terminal selection while an anchor is
+active.
 
 Ligatures are not forced on: ASCII runs use basic shaping so columns stay
 aligned. Feature tags in `font_features` are passed to shaping, but ligature
