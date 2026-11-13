@@ -30,7 +30,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Bold color / bright bold | Yes | ✅ default-foreground bold color and ANSI 0–7 brightening |
 | Selected text color | Yes | ✅ |
 | Minimum contrast | Yes | ✅ iTerm2's perceived-brightness algorithm |
-| Cursor guide | Yes | 🟡 color parsed, guide rendering not exposed yet |
+| Cursor guide | Yes | ✅ `cursor_guide_enabled` with `cursor_guide` color |
 | Sixel / inline images | iTerm2 image protocol and sixel | ⏳ |
 | OSC 8 hyperlinks | Yes | ✅ link color/underline and `Ctrl+click` open |
 | OSC 52 clipboard | Yes | ✅ via terminal events |
@@ -72,7 +72,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | `.itermcolors` import | Yes | ✅ `--import-theme` |
 | iTerm2 preferences import | Yes | ✅ `--import-iterm2` (`New Bookmarks`) |
 | iTerm2 default profile values | Yes | ✅ Default Bookmark / Smoooooth colors |
-| Live config reload | Yes | ⏳ restart required |
+| Live config reload | Yes | ✅ one-second file polling |
 | Per-profile key mappings | Yes | 🟡 global `[keybindings]` only |
 | Dynamic profiles | Yes | ⏳ |
 | Automatic profile switching | Yes | ⏳ |

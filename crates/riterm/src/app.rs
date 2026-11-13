@@ -3,7 +3,7 @@
 use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use std::time::{Duration, Instant};
+use std::time::{Duration, Instant, SystemTime};
 
 use alacritty_terminal::event::{Event as TermEvent, WindowSize};
 use alacritty_terminal::grid::Dimensions;
@@ -119,6 +119,8 @@ pub struct App {
     cursor_blink_on: bool,
     cursor_blink_next: Instant,
     last_click: Option<(Instant, PhysicalPosition<f64>, u8)>,
+    config_mtime: Option<SystemTime>,
+    config_poll_next: Instant,
     search: Option<SearchState>,
     copy_mode: Option<CopyState>,
 }
@@ -130,6 +132,9 @@ impl App {
         config: Config,
         command: Option<String>,
     ) -> Self {
+        let config_mtime = std::fs::metadata(&config_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
         let mut bindings = default_bindings();
         for (chord, name) in &config.keybindings {
             match Action::from_name(name) {
@@ -161,6 +166,8 @@ impl App {
             cursor_blink_on: true,
             cursor_blink_next: Instant::now() + Duration::from_millis(500),
             last_click: None,
+            config_mtime,
+            config_poll_next: Instant::now() + Duration::from_secs(1),
             search: None,
             copy_mode: None,
         }
@@ -168,6 +175,39 @@ impl App {
 
     fn tab_bar_height(&self) -> f32 {
         self.config.general.tab_bar_height * self.scale as f32
+    }
+
+    fn reload_config(&mut self) {
+        match Config::load(&self.config_path) {
+            Ok(config) => {
+                let mut bindings = default_bindings();
+                for (chord, name) in &config.keybindings {
+                    match Action::from_name(name) {
+                        Some(action) => {
+                            bindings.insert(chord.to_lowercase(), action);
+                        }
+                        None => warn!("unknown action {name:?} for keybinding {chord:?}"),
+                    }
+                }
+                self.config = config;
+                self.bindings = bindings;
+                self.mark_all_dirty();
+                self.update_title();
+                self.request_redraw();
+                tracing::info!("reloaded {}", self.config_path.display());
+            }
+            Err(err) => warn!("config reload failed: {err:#}"),
+        }
+    }
+
+    fn poll_config(&mut self) {
+        let modified = std::fs::metadata(&self.config_path)
+            .and_then(|metadata| metadata.modified())
+            .ok();
+        if modified != self.config_mtime && modified.is_some() {
+            self.config_mtime = modified;
+            self.reload_config();
+        }
     }
 
     fn restart_cursor_blink(&mut self) {
@@ -1678,20 +1718,26 @@ impl ApplicationHandler<UserEvent> for App {
     }
 
     fn about_to_wait(&mut self, event_loop: &ActiveEventLoop) {
-        let _ = &self.config_path;
-        let profile = self.profile_for_index(self.active_tab);
-        if !profile.cursor_blink || !self.focused || self.tabs.is_empty() {
-            event_loop.set_control_flow(ControlFlow::Wait);
-            return;
+        let now = Instant::now();
+        if now >= self.config_poll_next {
+            self.config_poll_next = now + Duration::from_millis(1000);
+            self.poll_config();
         }
 
-        let now = Instant::now();
-        if now >= self.cursor_blink_next {
+        let profile = self.profile_for_index(self.active_tab);
+        let blinking = profile.cursor_blink && self.focused && !self.tabs.is_empty();
+        if blinking && now >= self.cursor_blink_next {
             self.cursor_blink_on = !self.cursor_blink_on;
             self.cursor_blink_next = now + Duration::from_millis(500);
             self.request_redraw();
         }
-        event_loop.set_control_flow(ControlFlow::WaitUntil(self.cursor_blink_next));
+
+        let deadline = if blinking {
+            self.cursor_blink_next.min(self.config_poll_next)
+        } else {
+            self.config_poll_next
+        };
+        event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
     }
 }
 

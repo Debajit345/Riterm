@@ -157,6 +157,8 @@ use_bright_bold = true
 # bold = "#ffffff"
 # cursor = "#ffffff"
 # cursor_text = "#000000"
+# cursor_guide = "#60cdf0"
+# cursor_guide_enabled = false
 # selection = "#b3d7ff"
 # selection_text = "#000000"
 # link = "#328eee"
@@ -174,7 +176,9 @@ background = "#0f141a"
 
 `[profiles.NAME]` overrides only the fields it sets. `[profile]` is the base
 for every profile. `theme_variant = "auto"` follows `RITERM_THEME_VARIANT`,
-then `COLORFGBG`, then dark.
+then `COLORFGBG`, then dark. Config changes are picked up automatically while
+Riterm is running; fonts, colors, padding, and keybindings update without a
+restart.
 
 ### Built-in iTerm2 presets
 

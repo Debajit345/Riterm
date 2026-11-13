@@ -37,6 +37,12 @@ Themes can be a built-in preset name or an `.itermcolors` path. Presets carry
 base, `(Dark)`, and `(Light)` color sets. `ThemeMode` selects dark, light, or
 auto; auto consults `RITERM_THEME_VARIANT`, then `COLORFGBG`, then dark.
 
+The app polls the config file's modification time once a second while the
+event loop is idle. A successful reload replaces the config and rebuilt
+keybindings, marks every session dirty, and redraws; a malformed file leaves
+the running configuration untouched. Shell and scrollback changes apply to
+new sessions, while appearance changes apply immediately.
+
 ### `riterm-core`
 
 - `session.rs` — owns a `Pty`, a `Term<TermProxy>` from
@@ -155,8 +161,10 @@ at its vi-style position and reuses the terminal selection while an anchor is
 active. When the grid has scrollback history, a thin scrollbar track and thumb
 are drawn at the right edge of the pane.
 
-OSC 8 hyperlinks are stored by the terminal core in each cell and rendered in
-the profile's link color with an underline. `Ctrl+click` resolves the cell's
+The optional cursor guide is a one-pixel horizontal line in the profile's
+guide color across the cursor's row. OSC 8 hyperlinks are stored by the
+terminal core in each cell and rendered in the profile's link color with an
+underline. `Ctrl+click` resolves the cell's
 hyperlink first, then scans the line for an `http(s)://`, `ftp://`, or
 `file://` URL, and opens it with `xdg-open`. Middle-click paste and
 double/triple-click word/line selection are handled in the mouse path.

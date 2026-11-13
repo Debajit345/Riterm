@@ -195,6 +195,7 @@ fn merge_profile(target: &mut Profile, source: &Profile) {
         selection_text,
         link,
         cursor_guide,
+        cursor_guide_enabled,
         badge,
         palette,
         cursor_shape,

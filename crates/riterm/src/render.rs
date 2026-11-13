@@ -682,6 +682,22 @@ impl Renderer {
             }
         }
 
+        if focused && show_cursor && profile.cursor_guide_enabled {
+            if let Some(point) = cursor_viewport {
+                let thickness = (1.0 * self.scale as f32).max(1.0);
+                self.push_quad(
+                    Rect::new(
+                        inner.x,
+                        inner.y + (point.line + 1) as f32 * metrics.cell_h - thickness,
+                        inner.w,
+                        thickness,
+                    ),
+                    profile.cursor_guide,
+                    0.55,
+                );
+            }
+        }
+
         if let Some(copy_cursor) = copy_cursor {
             if let Some(point) = point_to_viewport(display_offset, copy_cursor) {
                 if point.line < session.size.rows && point.column < session.size.cols {

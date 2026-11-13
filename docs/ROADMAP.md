@@ -46,7 +46,7 @@ Target: replace a normal terminal for everyday work.
 - [ ] Multiple windows and session restore
 - [ ] Tab drag-reorder, tab colors, rename, close buttons
 - [ ] Hotkey window (drop-down) via compositor keybind + layer surface
-- [ ] Config hot reload (`notify`)
+- [x] Config hot reload (file polling)
 - [ ] Better PTY I/O: `poll(2)`/`epoll` instead of sleep polling
 - [x] Cell-accurate fallback for missing glyphs; color emoji renders
 - [x] OSC 8 link hit-testing and open-in-browser

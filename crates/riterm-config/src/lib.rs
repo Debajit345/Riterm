@@ -107,6 +107,8 @@ pub struct Profile {
     pub selection_text: Option<String>,
     pub link: Option<String>,
     pub cursor_guide: Option<String>,
+    /// Draw a horizontal guide line across the cursor's row.
+    pub cursor_guide_enabled: Option<bool>,
     pub badge: Option<String>,
     /// Exactly 16 ANSI colors, or any prefix (remaining colors keep defaults).
     pub palette: Option<Vec<String>>,
@@ -181,6 +183,9 @@ impl Profile {
         if let Some(v) = self.cursor_guide.as_deref().and_then(Rgb::parse) {
             target.cursor_guide = v;
         }
+        if let Some(v) = self.cursor_guide_enabled {
+            target.cursor_guide_enabled = v;
+        }
         if let Some(v) = self.badge.as_deref().and_then(Rgb::parse) {
             target.badge = v;
         }
@@ -241,6 +246,7 @@ pub struct ResolvedProfile {
     pub selection_text: Rgb,
     pub link: Rgb,
     pub cursor_guide: Rgb,
+    pub cursor_guide_enabled: bool,
     pub badge: Rgb,
     pub palette: [Rgb; 16],
     pub cursor_shape: CursorShapeSetting,
@@ -288,6 +294,7 @@ impl Default for ResolvedProfile {
             selection_text: Rgb::parse("#000000").unwrap(),
             link: Rgb::parse("#328eee").unwrap(),
             cursor_guide: Rgb::parse("#60cdf0").unwrap(),
+            cursor_guide_enabled: false,
             badge: Rgb::parse("#faa6a6").unwrap(),
             palette,
             cursor_shape: CursorShapeSetting::Block,
@@ -471,6 +478,8 @@ line_height = 1.2
 # bold = "#ffffff"
 # cursor = "#ffffff"
 # cursor_text = "#000000"
+# cursor_guide = "#60cdf0"
+# cursor_guide_enabled = false
 # selection = "#b3d7ff"
 # selection_text = "#000000"
 # link = "#328eee"
