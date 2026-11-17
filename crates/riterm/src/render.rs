@@ -13,7 +13,7 @@ use alacritty_terminal::term::{TermMode, point_to_viewport, viewport_to_point};
 use alacritty_terminal::vte::ansi::{Color as AnsiColor, CursorShape, NamedColor};
 use anyhow::{Context, Result};
 use bytemuck::{Pod, Zeroable};
-use glyphon::cosmic_text::{FeatureTag, FontFeatures, UnderlineStyle};
+use glyphon::cosmic_text::{Align, FeatureTag, FontFeatures, UnderlineStyle};
 use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
@@ -133,6 +133,7 @@ pub struct FontMetrics {
 #[derive(Clone, Copy, Debug, PartialEq, Eq)]
 enum AreaKind {
     Session { id: u64, segment: usize },
+    Badge { id: u64 },
     TabBar,
     Overlay,
     StatusBar,
@@ -170,6 +171,24 @@ struct SessionBuffer {
     cols: usize,
     rows: usize,
     cursor_visible: bool,
+}
+
+/// Everything that affects a laid-out badge. Re-layout is skipped while the
+/// text, style, and available box stay the same.
+#[derive(Clone, Debug, PartialEq, Eq)]
+struct BadgeKey {
+    text: String,
+    family: Option<String>,
+    color: Rgb,
+    opacity_bits: u32,
+    scale_bits: u64,
+    width_bits: u32,
+    height_bits: u32,
+}
+
+struct BadgeBuffer {
+    buffer: Buffer,
+    key: BadgeKey,
 }
 
 /// The concrete font families chosen for a profile.
@@ -217,6 +236,7 @@ pub struct Renderer {
     background_image: Option<BackgroundImageState>,
 
     session_buffers: HashMap<u64, SessionBuffer>,
+    badge_buffers: HashMap<u64, BadgeBuffer>,
     tab_buffer: Option<Buffer>,
     overlay_buffer: Option<Buffer>,
     status_buffer: Option<Buffer>,
@@ -384,6 +404,7 @@ impl Renderer {
             backgrounds: Vec::new(),
             background_image: None,
             session_buffers: HashMap::new(),
+            badge_buffers: HashMap::new(),
             tab_buffer: None,
             overlay_buffer: None,
             status_buffer: None,
@@ -994,6 +1015,175 @@ impl Renderer {
         );
     }
 
+    /// Draw an iTerm2-style badge in the top-right of a pane. The text is
+    /// right-aligned and word-wrapped; the largest bold font size between 4
+    /// and 100 points that fits the profile's width and height fractions wins.
+    pub fn prepare_badge(
+        &mut self,
+        session_id: u64,
+        text: &str,
+        profile: &ResolvedProfile,
+        rect: Rect,
+    ) {
+        if text.is_empty() || rect.w < 8.0 || rect.h < 8.0 || profile.badge_max_height <= 0.0 {
+            self.badge_buffers.remove(&session_id);
+            return;
+        }
+
+        let scale = self.scale as f32;
+        let margin_top = profile.badge_top_margin * scale;
+        let margin_right = profile.badge_right_margin * scale;
+        let max_w = (rect.w * profile.badge_max_width)
+            .min((rect.w - margin_right).max(1.0))
+            .max(1.0);
+        let max_h = (rect.h * profile.badge_max_height)
+            .min((rect.h - margin_top).max(1.0))
+            .max(1.0);
+        if max_h < 1.0 {
+            self.badge_buffers.remove(&session_id);
+            return;
+        }
+
+        let family_name = self.badge_family_name(profile);
+        let opacity = (profile.badge_opacity.clamp(0.0, 1.0) * 255.0).round() as u8;
+        let key = BadgeKey {
+            text: text.to_string(),
+            family: family_name.clone(),
+            color: profile.badge,
+            opacity_bits: u32::from(opacity),
+            scale_bits: self.scale.to_bits(),
+            width_bits: max_w.to_bits(),
+            height_bits: max_h.to_bits(),
+        };
+
+        let cached = self
+            .badge_buffers
+            .get(&session_id)
+            .is_some_and(|badge| badge.key == key);
+        if !cached {
+            let fill = Color::rgba(profile.badge.r, profile.badge.g, profile.badge.b, opacity);
+            let mut chosen = None;
+            let mut low = 4u32;
+            let mut high = 100u32;
+            while low <= high {
+                let mid = (low + high) / 2;
+                let size_px = mid as f32 * scale;
+                match self.layout_badge(text, family_name.as_deref(), fill, max_w, max_h, size_px) {
+                    Some((buffer, height)) => {
+                        chosen = Some((buffer, height));
+                        low = mid + 1;
+                    }
+                    None => high = mid - 1,
+                }
+            }
+            // A single unbreakable word can overflow even at 4pt. iTerm2
+            // truncates in that case; draw the smallest size and let the text
+            // bounds clip it.
+            let chosen = chosen.or_else(|| {
+                self.layout_badge(
+                    text,
+                    family_name.as_deref(),
+                    fill,
+                    max_w,
+                    max_h,
+                    4.0 * scale,
+                )
+            });
+            let Some((buffer, _height)) = chosen else {
+                self.badge_buffers.remove(&session_id);
+                return;
+            };
+            self.badge_buffers
+                .insert(session_id, BadgeBuffer { buffer, key });
+        }
+
+        let right = rect.right() - margin_right;
+        let left = (right - max_w).max(rect.x);
+        let top = rect.y + margin_top;
+        let badge_rect = Rect::new(left, top, max_w, max_h);
+        self.text_specs.push(AreaSpec {
+            kind: AreaKind::Badge { id: session_id },
+            left,
+            top,
+            bounds: text_bounds(badge_rect),
+            default_color: Color::rgba(profile.badge.r, profile.badge.g, profile.badge.b, opacity),
+        });
+    }
+
+    /// The badge font is bold sans-serif by default. Resolve the configured
+    /// family against the font database, then try common Linux sans families
+    /// before falling back to the profile's terminal font.
+    fn badge_family_name(&mut self, profile: &ResolvedProfile) -> Option<String> {
+        let db = self.font_system.db();
+        let available = |name: &str| family_available(db, name);
+        profile
+            .badge_font
+            .as_deref()
+            .filter(|name| available(name))
+            .map(str::to_string)
+            .or_else(|| {
+                [
+                    "Helvetica",
+                    "Arial",
+                    "Liberation Sans",
+                    "DejaVu Sans",
+                    "Noto Sans",
+                    "FreeSans",
+                ]
+                .into_iter()
+                .find(|name| available(name))
+                .map(str::to_string)
+            })
+            .or_else(|| {
+                profile
+                    .font_family
+                    .as_deref()
+                    .filter(|name| available(name))
+                    .map(str::to_string)
+            })
+            .or_else(|| {
+                profile
+                    .font_fallbacks
+                    .iter()
+                    .find(|name| available(name))
+                    .cloned()
+            })
+    }
+
+    fn layout_badge(
+        &mut self,
+        text: &str,
+        family: Option<&str>,
+        fill: Color,
+        max_w: f32,
+        max_h: f32,
+        size_px: f32,
+    ) -> Option<(Buffer, f32)> {
+        let size_px = size_px.max(1.0);
+        let metrics = Metrics::new(size_px, (size_px * 1.2).max(size_px));
+        let attrs = Attrs::new()
+            .family(family_of(family))
+            .color(fill)
+            .weight(Weight::BOLD);
+        let mut buffer = Buffer::new(&mut self.font_system, metrics);
+        buffer.set_size(Some(max_w.max(1.0)), Some(max_h.max(1.0)));
+        buffer.set_text(text, &attrs, Shaping::Advanced, Some(Align::Right));
+        buffer.shape_until_scroll(&mut self.font_system, false);
+
+        let mut height = 0.0f32;
+        let mut width = 0.0f32;
+        let mut lines = 0;
+        for run in buffer.layout_runs() {
+            lines += 1;
+            height = height.max(run.line_top + run.line_height);
+            width = width.max(run.line_w);
+        }
+        if lines == 0 {
+            return None;
+        }
+        (height <= max_h + 0.5 && width <= max_w + 0.5).then_some((buffer, height))
+    }
+
     /// Draw a one-line status/search prompt at the bottom of `rect`.
     pub fn prepare_overlay(
         &mut self,
@@ -1597,6 +1787,7 @@ impl Renderer {
         // Prepare text areas.
         {
             let buffers = &self.session_buffers;
+            let badge_buffers = &self.badge_buffers;
             let tab_buffer = self.tab_buffer.as_ref();
             let overlay_buffer = self.overlay_buffer.as_ref();
             let status_buffer = self.status_buffer.as_ref();
@@ -1606,6 +1797,7 @@ impl Renderer {
                         .get(&id)
                         .and_then(|buffer| buffer.segments.get(segment))
                         .map(|segment| &segment.buffer),
+                    AreaKind::Badge { id } => badge_buffers.get(&id).map(|badge| &badge.buffer),
                     AreaKind::TabBar => tab_buffer,
                     AreaKind::Overlay => overlay_buffer,
                     AreaKind::StatusBar => status_buffer,

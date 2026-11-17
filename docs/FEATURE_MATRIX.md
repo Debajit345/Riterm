@@ -66,7 +66,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Bold/italic font toggles | Yes | ✅ |
 | OpenType feature list | Yes | 🟡 parsed and passed to shaping |
 | ANSI palette, fg/bg/bold/cursor/selection/link | Yes | ✅ |
-| Cursor text / selected text / cursor guide / badge colors | Yes | 🟡 cursor, selected text, and guide colors applied; badge rendering planned |
+| Cursor text / selected text / cursor guide / badge colors | Yes | ✅ cursor, selected text, guide, and badge colors applied |
 | Built-in iTerm2 color presets | 11 | ✅ all 11, dark/light variants, `--list-themes` |
 | Dark/light/auto appearance | Yes | ✅ `theme_variant` with `RITERM_THEME_VARIANT`/`COLORFGBG` |
 | `.itermcolors` import | Yes | ✅ `--import-theme` |
@@ -98,7 +98,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Per-command "copy output" | Yes | ✅ latest command output; per-mark history UI planned |
 | Utilities (`imgcat`, `it2copy`, `it2dl`, ...) | Yes | ⏳ |
 | `it2ssh`, remote host integration | Yes | ⏳ |
-| User vars / badges (OSC 1337) | Yes | ⏳ |
+| User vars / badges (OSC 1337) | Yes | ✅ `SetUserVar` (set/unset, base64 UTF-8) and `SetBadgeFormat`, with `\(session.*)` / `\(user.*)` interpolation |
 
 ## Selection, clipboard, search
 
@@ -139,7 +139,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Annotations / notes | Yes | ⏳ |
 | Status bar components | Yes | ✅ cwd, git, command status, clock, host, user, load, memory, battery, session, spacers, custom text |
 | Status bar layout | Yes | ✅ per-profile components, top/bottom position, height, runtime toggle |
-| Badges | Yes | ⏳ |
+| Badges | Yes | ✅ profile text/color/font/opacity/margins/limits, bold right-aligned word wrap, automatic 4–100pt fit, OSC override |
 | AI chat / Composer | Yes | ⏳ deferred |
 | Browser panes | Yes | ⏳ deferred |
 | Password manager | Yes | ⏳ deferred |
@@ -149,7 +149,7 @@ It is a roadmap document, not a claim of parity. Status values:
 The current build covers the daily-driver foundation and a meaningful slice of
 iTerm2's appearance system: exact default colors, all built-in presets, font
 fallback, bold/selection/cursor colors, minimum contrast, blinking cursors,
-search, copy mode, prompt marks, a component-based status bar, and
-notifications. The largest remaining gaps are highlight/run trigger actions,
-tmux control mode, inline images, hotkey windows, background effects, badges,
-and scripting. See [ROADMAP.md](ROADMAP.md) for sequencing.
+search, copy mode, prompt marks, a component-based status bar, badges with user
+variables, and notifications. The largest remaining gaps are highlight/run
+trigger actions, tmux control mode, inline images, hotkey windows, background
+effects, and scripting. See [ROADMAP.md](ROADMAP.md) for sequencing.

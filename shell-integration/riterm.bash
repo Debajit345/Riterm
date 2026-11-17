@@ -19,6 +19,24 @@ __riterm_osc() {
     printf '\033]%s\007' "$1"
 }
 
+# Usage: iterm2_set_user_var key value
+# The value is base64-encoded as iTerm2 expects. Use it in a badge with
+# \(user.key).
+iterm2_set_user_var() {
+    local encoded
+    encoded=$(printf '%s' "$2" | base64 | tr -d '\n')
+    printf '\033]1337;SetUserVar=%s=%s\007' "$1" "$encoded"
+}
+
+# Usage: riterm_set_badge 'format'
+# The format may contain interpolations such as \(session.path). Passing an
+# empty string clears the badge.
+riterm_set_badge() {
+    local encoded
+    encoded=$(printf '%s' "$1" | base64 | tr -d '\n')
+    printf '\033]1337;SetBadgeFormat=%s\007' "$encoded"
+}
+
 # Percent-encode a path for OSC 7. LC_CTYPE=C forces byte-wise iteration so
 # each UTF-8 byte is encoded separately, matching the receiver's decoder.
 # Stores the result in __RITERM_ENCODED_PATH to avoid forking each prompt.

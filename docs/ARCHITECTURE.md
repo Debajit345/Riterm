@@ -50,17 +50,19 @@ new sessions, while appearance changes apply immediately.
   `alacritty_terminal`, a `vte::ansi::Processor`, and a background I/O thread.
   The thread reads PTY bytes and writes queued input; events are delivered to
   the UI through a `SessionSink` closure.
-- `shell_integration.rs` — incremental OSC 133/OSC 7 scanner. It is independent
-  of the VT parser and returns the end offset of each complete sequence, so
-  `feed()` can advance the emulator in stream order and record the mark or
-  working directory at the correct point in the stream.
+- `shell_integration.rs` — incremental OSC 133/OSC 7/OSC 1337 scanner. It is
+  independent of the VT parser and returns the end offset of each complete
+  sequence, so `feed()` can advance the emulator in stream order and record the
+  mark, working directory, user variable, or badge format at the correct point
+  in the stream.
 - `size.rs` — the `Dimensions` implementation used by `Term::new` and
   `Term::resize`.
 
 `Session::feed` scans bytes for marks and directory reports, feeds everything up
 to and including each sequence to the VT parser, records the mark at the
-resulting cursor position (or updates the session's `cwd`/remote user/host),
-then feeds the remaining bytes. This keeps marks anchored to the prompt even
+resulting cursor position (or updates the session's `cwd`/remote user/host,
+`user_vars`, and `badge_format`), then feeds the remaining bytes. This keeps
+marks anchored to the prompt even
 when escape sequences are split across PTY reads.
 
 ### `riterm`
@@ -69,7 +71,8 @@ when escape sequences are split across PTY reads.
   import and shell-integration subcommands.
 - `app.rs` — `ApplicationHandler<UserEvent>`: tabs, split trees, layout
   reservation for the tab and status bars, focus, mouse selection/reporting,
-  clipboard, session events, cursor blink scheduling, and drawing.
+  clipboard, session events, badge evaluation, cursor blink scheduling, and
+  drawing.
 - `layout.rs` — `PaneNode` split tree, rectangle layout, split/remove, tests.
 - `input.rs` — default keybindings, chord canonicalization, action lookup, key
   encoding for the PTY (application cursor keys, CSI modifiers, function keys),
@@ -79,6 +82,10 @@ when escape sequences are split across PTY reads.
   reads, compiles enabled regexes, and skips invalid expressions with a warning.
 - `notifications.rs` — sends notifications through `notify-send` on a detached
   thread, so a slow notification daemon cannot block the event loop.
+- `badge.rs` — builds badge text for a session, implementing the safe subset of
+  iTerm2's `\(...)` interpolation syntax (`session.*` values, `user.*`
+  variables, and backslash escapes). Unknown names and function calls resolve
+  to empty text.
 - `statusbar.rs` — turns a profile's component list and the active session into
   styled segments. Clock, host, user, load, memory, and battery are sampled at
   most once a second; git branches are cached per directory. It also contains
@@ -89,7 +96,7 @@ when escape sequences are split across PTY reads.
 - `render.rs` — wgpu device/surface, quad pipeline, glyphon text atlas, font
   family resolution and metrics caches, segment shaping, cell
   background/selection/search-highlight/cursor rendering, tab bar, status bar,
-  and the search/copy overlay line.
+  badges, and the search/copy overlay line.
 - `quads.wgsl` — minimal instanced-free quad shader.
 - `shell_install.rs` — installs scripts and hooks rc files.
 
@@ -186,6 +193,21 @@ the event loop schedules a redraw when the status bar is visible. Git branch
 lookups walk up to the repository and are cached per working directory for two
 seconds. `Ctrl+Shift+S` stores a per-tab override without modifying the
 profile, and a config reload re-resolves the profile for every pane.
+
+## Badges
+
+`badge::text_for_session` prefers a session's OSC `SetBadgeFormat` value over
+the profile's `badge_text`, then expands it once per draw with the session's
+current path, title, reported host/user, grid size, and user variables. The
+renderer caches the shaped result per session and only re-lays it out when the
+text, color, opacity, font, scale, or pane box changes.
+
+Layout mirrors iTerm2's `iTermBadgeLabel`: the available box is the pane's
+width and height multiplied by `badge_max_width` and `badge_max_height`, offset
+from the top-right corner by the badge margins. A binary search over 4–100
+points chooses the largest bold size whose shaped height and longest line fit.
+The buffer is right-aligned and word-wrapped, and its text area is emitted after
+the session's cell text so the translucent badge overlays terminal content.
 
 ## Rendering
 
@@ -296,20 +318,22 @@ simplicity; replacing it with `polling`/`epoll` is a planned optimization.
 - `TERM_PROGRAM=iTerm2` and `LC_TERMINAL=iTerm2` are exported so tools that
   detect iTerm2 enable their integrations. `RITERM=1` identifies Riterm itself.
 - OSC 133 and OSC 7 drive shell integration; the legacy
-  `OSC 1337;CurrentDir` form is accepted for directory tracking. Other OSC 1337
-  features (badges, user vars, inline images) are not implemented yet.
+  `OSC 1337;CurrentDir` form is accepted for directory tracking.
+  `OSC 1337;SetUserVar` and `OSC 1337;SetBadgeFormat` update badges; inline
+  images are not implemented yet.
 - iTerm2 plists are read, never modified. Import writes native TOML.
 
 ## Testing
 
-- `riterm-core`: OSC 133 scanner tests (split sequences, ST vs BEL, exit codes)
-  and a real PTY integration test that spawns `/bin/sh`, collects output, feeds
-  it into the terminal, and asserts the grid content.
+- `riterm-core`: OSC 133/OSC 7/OSC 1337 scanner tests (split sequences, ST vs
+  BEL, exit codes, base64 user variables and badge formats) and a real PTY
+  integration test that spawns `/bin/sh`, collects output, feeds it into the
+  terminal, and asserts the grid content.
 - `riterm-config`: color parsing, preset variants, theme resolution, profile
-  merging, and font-name parsing.
+  merging, badge settings, and font-name parsing.
 - `riterm` (binary crate): split tree layout and window-area reservation, key
-  encoding, Unicode shaping, status bar paths/git/system parsing, and
-  command-failure bookkeeping.
+  encoding, Unicode shaping, status bar paths/git/system parsing, badge
+  interpolation, and command-failure bookkeeping.
 - `--render-check` writes a deterministic offscreen PNG that exercises presets,
   styles, fallback glyphs, wide characters, RTL, emoji, and the tab and status
-  bars.
+  bars. `RITERM_RENDER_BADGE=1` adds the badge demo.

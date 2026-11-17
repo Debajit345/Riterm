@@ -2060,6 +2060,7 @@ dependencies = [
  "alacritty_terminal",
  "anyhow",
  "arboard",
+ "base64 0.22.1",
  "bytemuck",
  "clap",
  "directories",
@@ -2097,6 +2098,7 @@ version = "0.1.0"
 dependencies = [
  "alacritty_terminal",
  "anyhow",
+ "base64 0.22.1",
  "log",
  "tempfile",
  "tracing",

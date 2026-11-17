@@ -360,6 +360,19 @@ fn profile_from_dict(dict: &plist::Dictionary) -> Profile {
         link: dict_color_value(dict, "Link Color").map(|c| c.to_hex()),
         cursor_guide: dict_color_value(dict, "Cursor Guide Color").map(|c| c.to_hex()),
         badge: dict_color_value(dict, "Badge Color").map(|c| c.to_hex()),
+        badge_text: dict
+            .get("Badge Text")
+            .and_then(Value::as_string)
+            .map(str::to_string),
+        badge_font: dict
+            .get("Badge Font")
+            .and_then(Value::as_string)
+            .map(parse_badge_font),
+        badge_opacity: dict_alpha_value(dict, "Badge Color"),
+        badge_top_margin: dict_number(dict, "Badge Top Margin"),
+        badge_right_margin: dict_number(dict, "Badge Right Margin"),
+        badge_max_width: dict_number(dict, "Badge Max Width"),
+        badge_max_height: dict_number(dict, "Badge Max Height"),
         palette: all_palette.then_some(palette),
         cursor_blink: dict_bool(dict, "Blinking Cursor"),
         cursor_shape: dict_cursor_shape(dict),
@@ -438,15 +451,54 @@ fn dict_cursor_shape(dict: &plist::Dictionary) -> Option<super::CursorShapeSetti
 fn parse_iterm_font(value: &str) -> Option<(String, f32)> {
     let (family, size) = value.rsplit_once(' ')?;
     let size = size.parse::<f32>().ok()?;
-    let family = family
+    Some((normalize_font_family(family), size))
+}
+
+/// Turn a PostScript-style font name (`Menlo-Bold`) into the family name used
+/// by fontconfig (`Menlo`). Names that already contain spaces are left alone.
+fn normalize_font_family(name: &str) -> String {
+    let trimmed = name
         .trim_end_matches("-Regular")
         .trim_end_matches("-BoldItalic")
         .trim_end_matches("-Bold")
         .trim_end_matches("-Italic")
         .trim_end_matches("-Light")
-        .trim_end_matches("-Medium")
-        .replace('-', " ");
-    Some((family, size))
+        .trim_end_matches("-Medium");
+    if trimmed.contains('-') && !trimmed.contains(' ') {
+        trimmed.replace('-', " ")
+    } else {
+        trimmed.to_string()
+    }
+}
+
+fn parse_badge_font(value: &str) -> String {
+    let value = value.trim();
+    match value.rsplit_once(' ') {
+        Some((family, size)) if size.parse::<f32>().is_ok() => normalize_font_family(family),
+        _ => normalize_font_family(value),
+    }
+}
+
+fn dict_number(dict: &plist::Dictionary, key: &str) -> Option<f32> {
+    let value = dict.get(key)?;
+    value
+        .as_real()
+        .map(|number| number as f32)
+        .or_else(|| value.as_signed_integer().map(|number| number as f32))
+        .or_else(|| {
+            value
+                .as_string()
+                .and_then(|text| text.trim().parse::<f32>().ok())
+        })
+}
+
+fn dict_alpha_value(dict: &plist::Dictionary, key: &str) -> Option<f32> {
+    let color = dict.get(key)?.as_dictionary()?;
+    let alpha = color.get("Alpha Component")?;
+    alpha
+        .as_real()
+        .map(|number| number as f32)
+        .or_else(|| alpha.as_signed_integer().map(|number| number as f32))
 }
 
 fn dict_color_value(dict: &plist::Dictionary, key: &str) -> Option<Rgb> {
@@ -553,5 +605,36 @@ mod tests {
                 .map(|c| c.to_hex()),
             Some("#fdf6e3".to_string())
         );
+    }
+
+    #[test]
+    fn imports_badge_settings() {
+        let mut color = plist::Dictionary::new();
+        color.insert("Red Component".into(), Value::Real(1.0));
+        color.insert("Green Component".into(), Value::Real(0.25));
+        color.insert("Blue Component".into(), Value::Real(0.0));
+        color.insert("Alpha Component".into(), Value::Real(0.4));
+
+        let mut profile = plist::Dictionary::new();
+        profile.insert(
+            "Badge Text".into(),
+            Value::String(r"\(session.path)".into()),
+        );
+        profile.insert("Badge Font".into(), Value::String("Menlo-Bold".into()));
+        profile.insert("Badge Color".into(), Value::Dictionary(color));
+        profile.insert("Badge Top Margin".into(), Value::Real(14.0));
+        profile.insert("Badge Right Margin".into(), Value::Integer(12_i64.into()));
+        profile.insert("Badge Max Width".into(), Value::Real(0.65));
+        profile.insert("Badge Max Height".into(), Value::Real(0.3));
+
+        let imported = profile_from_dict(&profile);
+        assert_eq!(imported.badge_text.as_deref(), Some(r"\(session.path)"));
+        assert_eq!(imported.badge_font.as_deref(), Some("Menlo"));
+        assert_eq!(imported.badge.as_deref(), Some("#ff4000"));
+        assert_eq!(imported.badge_opacity, Some(0.4));
+        assert_eq!(imported.badge_top_margin, Some(14.0));
+        assert_eq!(imported.badge_right_margin, Some(12.0));
+        assert_eq!(imported.badge_max_width, Some(0.65));
+        assert_eq!(imported.badge_max_height, Some(0.3));
     }
 }

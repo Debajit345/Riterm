@@ -5,17 +5,18 @@
 It brings the parts of iTerm2 that matter day-to-day to Wayland and X11:
 GPU-accelerated rendering, tabs and recursive splits, named profiles, iTerm2's
 built-in color presets and profile import, font fallback, scrollback search,
-vi-style copy mode, an iTerm2-style status bar, and iTerm2-compatible OSC 133
-shell integration. It is not a macOS app port; it is a native Linux terminal
-that speaks iTerm2's protocols and configuration formats.
+vi-style copy mode, an iTerm2-style status bar and badges, and
+iTerm2-compatible OSC 133 shell integration. It is not a macOS app port; it is
+a native Linux terminal that speaks iTerm2's protocols and configuration
+formats.
 
 ![Riterm rendering iTerm2 Smoooooth and Solarized Dark profiles](docs/screenshot.png)
 
 > **Status: early, usable, and expanding.** The terminal, tabs, splits,
 > profiles, built-in themes, font fallback, cursor blinking, imports, search,
-> copy mode, status bar, notifications, and shell integration work. tmux
-> control mode, richer trigger actions, inline images, and scripting are on the
-> roadmap. See
+> copy mode, status bar, badges, notifications, and shell integration work.
+> tmux control mode, richer trigger actions, inline images, and scripting are
+> on the roadmap. See
 > [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) and
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -53,6 +54,11 @@ that speaks iTerm2's protocols and configuration formats.
   status, host, user, load, memory, battery, clock, session title, spacers, and
   custom text. OSC 7 from the shell keeps the directory and remote
   user/host current, including across `ssh`.
+- **Badges and user variables**: iTerm2's large translucent badge in the
+  top-right of a pane, with bold right-aligned word wrapping, automatic font
+  sizing, profile colors and margins, and interpolation of session values. The
+  shell or programs can set variables with `OSC 1337;SetUserVar` and replace
+  the badge with `OSC 1337;SetBadgeFormat`.
 - **Notifications and triggers**: desktop notifications for long or failed
   commands while unfocused, for the bell, and for configured regex triggers.
   Trigger matches can also mark the tab with the attention dot.
@@ -75,6 +81,8 @@ that speaks iTerm2's protocols and configuration formats.
   - OSC 7 and `1337;CurrentDir` working-directory reports, including the
     `user@host` authority, percent-encoded paths, and iTerm2's Latin-1
     fallback for non-UTF-8 paths.
+  - `1337;SetUserVar` user variables and `1337;SetBadgeFormat` session badges,
+    with iTerm2-style `\(session.path)` / `\(user.name)` interpolation.
   - Sets `TERM_PROGRAM=iTerm2`, `LC_TERMINAL=iTerm2`, `ITERM_SESSION_ID`, and
     `RITERM=1` for shells and tools that check for iTerm2.
 - **Shell integration installer** for bash, zsh, and fish
@@ -198,6 +206,16 @@ minimum_contrast = 0.0
 # iTerm2-style status bar (components are drawn left to right).
 # status_bar = true
 # status_bar_components = ["cwd", "git", "spacer", "command", "clock"]
+# Large badge in the top-right of the pane. The template supports
+# \(session.path), \(session.hostname), and \(user.name) interpolations.
+# badge_text = '\(user.env)'
+# badge = "#faa6a6"
+# badge_font = "Helvetica"
+# badge_opacity = 0.5
+# badge_top_margin = 10.0
+# badge_right_margin = 10.0
+# badge_max_width = 0.5
+# badge_max_height = 0.2
 
 [profiles.Work]
 font_size = 14.0
@@ -218,8 +236,8 @@ background = "#0f141a"
 for every profile. `theme_variant = "auto"` follows `RITERM_THEME_VARIANT`,
 then `COLORFGBG`, then dark. Config changes are picked up automatically while
 Riterm is running; fonts, colors, padding, keybindings, triggers,
-notifications, background images, opacity, and the status bar update without a
-restart.
+notifications, background images, opacity, badges, and the status bar update
+without a restart.
 
 ### Built-in iTerm2 presets
 
@@ -275,6 +293,66 @@ Text that does not fit is shortened in the middle, longest segment first, so
 every component stays visible. System values refresh once a second; git branch
 lookups are cached per directory. `Ctrl+Shift+S` toggles the bar for the active
 tab at runtime without changing the profile.
+
+### Badges and user variables
+
+![Riterm showing DEV and STAGE badges](docs/badge.png)
+
+Badges are the large translucent text iTerm2 draws in the top-right of a pane.
+Set a template with `badge_text`; an empty template (the default) draws
+nothing. Riterm starts at 4 points, binary-searches up to 100 for the largest
+bold size that fits inside `badge_max_width` (default 50% of the pane) and
+`badge_max_height` (default 20%), and word-wraps right-aligned. The font,
+color, opacity, and margins match iTerm2's profile settings:
+
+```toml
+[profile]
+badge_text = '\(user.env)'
+badge = "#faa6a6"       # same color presets use for iTerm2's badge
+badge_font = "Helvetica"
+badge_opacity = 0.5
+badge_top_margin = 10.0
+badge_right_margin = 10.0
+badge_max_width = 0.5
+badge_max_height = 0.2
+```
+
+Templates support these interpolations:
+
+| Expression | Value |
+|---|---|
+| `\(session.path)` | Working directory reported by OSC 7 |
+| `\(session.hostname)` | Remote host from OSC 7, or the local hostname |
+| `\(session.username)` | Remote user from OSC 7, or the local user |
+| `\(session.name)` | Shell-reported session title, falling back to the profile name |
+| `\(session.profileName)` | Active profile name |
+| `\(session.columns)`, `\(session.rows)` | Terminal grid size |
+| `\(session.id)` | Riterm session id |
+| `\(user.NAME)` | A variable set with `OSC 1337;SetUserVar` |
+
+Unknown variables and function calls render as empty text; Riterm does not
+evaluate arbitrary expressions. `\\(` escapes a literal backslash.
+
+The installed shell integration defines iTerm2's helper plus a badge helper:
+
+```sh
+iterm2_set_user_var env prod        # -> \(user.env)
+riterm_set_badge '\(user.env) · \(session.path)'
+riterm_set_badge ''                 # clear the session badge
+```
+
+Any program can emit the protocols directly. `SetUserVar` takes a bare name
+and base64-encoded UTF-8 value; a name without `=` unsets it.
+`SetBadgeFormat` takes base64-encoded text and overrides `badge_text` for that
+session only:
+
+```sh
+printf '\033]1337;SetUserVar=env=%s\007' "$(printf prod | base64)"
+printf '\033]1337;SetBadgeFormat=%s\007' "$(printf '%s' '\(user.env)' | base64)"
+```
+
+The iTerm2 profile importer maps `Badge Text`, `Badge Color` (including its
+alpha), `Badge Font`, the two margins, and the maximum width/height fractions.
 
 ### Notifications and triggers
 
@@ -360,11 +438,15 @@ OSC 133;B              prompt end / user input starts
 OSC 133;C              command started
 OSC 133;D;<status>     command finished
 OSC 7;file://user@host/path   current working directory (percent-encoded)
+OSC 1337;SetUserVar=name=base64   set \(user.name) for badges
+OSC 1337;SetBadgeFormat=base64    replace the profile badge for this session
 ```
 
 The scanner also accepts the older `OSC 1337;CurrentDir=<path>` form, drops an
 OSC 7 query string such as `?machineID=...`, falls back to Latin-1 for
-non-UTF-8 paths, and updates the status bar's directory, user, and host.
+non-UTF-8 paths, and updates the status bar's directory, user, and host. Badge
+templates are re-evaluated whenever a mark, user variable, badge format, working
+directory, or resize changes.
 
 ## Architecture
 

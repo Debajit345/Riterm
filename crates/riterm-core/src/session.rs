@@ -1,4 +1,4 @@
-use std::collections::HashMap;
+use std::collections::{BTreeMap, HashMap};
 use std::io::{ErrorKind, Read, Write};
 use std::path::PathBuf;
 use std::sync::Arc;
@@ -123,6 +123,12 @@ pub struct Session {
     pub remote_user: Option<String>,
     /// Host reported by OSC 7, which may be remote after `ssh`.
     pub remote_host: Option<String>,
+    /// Variables set by `OSC 1337;SetUserVar`, keyed by their bare name
+    /// (without the `user.` prefix iTerm2 uses in interpolations).
+    pub user_vars: BTreeMap<String, String>,
+    /// Badge format from `OSC 1337;SetBadgeFormat`, overriding the profile's
+    /// badge text for this session. `None` follows the profile.
+    pub badge_format: Option<String>,
     pub command_state: CommandState,
     pub marks: Vec<Mark>,
     pub dirty: bool,
@@ -282,6 +288,8 @@ impl Session {
             cwd,
             remote_user: None,
             remote_host: None,
+            user_vars: BTreeMap::new(),
+            badge_format: None,
             command_state: CommandState::Idle,
             marks: Vec::new(),
             dirty: true,
@@ -330,6 +338,23 @@ impl Session {
                     if host.is_some() {
                         self.remote_host = host;
                     }
+                }
+                ScanItem::UserVariable { end, name, value } => {
+                    self.processor.advance(&mut self.term, &bytes[pos..end]);
+                    pos = end;
+                    match value {
+                        Some(value) => {
+                            self.user_vars.insert(name, value);
+                        }
+                        None => {
+                            self.user_vars.remove(&name);
+                        }
+                    }
+                }
+                ScanItem::BadgeFormat { end, format } => {
+                    self.processor.advance(&mut self.term, &bytes[pos..end]);
+                    pos = end;
+                    self.badge_format = Some(format);
                 }
             }
         }
@@ -497,6 +522,27 @@ mod tests {
             session.cwd.as_deref(),
             Some(std::path::Path::new("/var/log"))
         );
+    }
+
+    #[test]
+    fn tracks_user_vars_and_badge_formats() {
+        use base64::Engine as _;
+        let b64 = |text: &str| base64::engine::general_purpose::STANDARD.encode(text);
+
+        let mut session = scratch_session();
+        let set = format!("\x1b]1337;SetUserVar=env={}\x07", b64("prod"));
+        session.feed(set.as_bytes());
+        assert_eq!(
+            session.user_vars.get("env").map(String::as_str),
+            Some("prod")
+        );
+
+        session.feed(b"\x1b]1337;SetUserVar=env\x07");
+        assert!(session.user_vars.is_empty());
+
+        let badge = format!("\x1b]1337;SetBadgeFormat={}\x07", b64(r"\(user.env)"));
+        session.feed(badge.as_bytes());
+        assert_eq!(session.badge_format.as_deref(), Some(r"\(user.env)"));
     }
 
     #[test]

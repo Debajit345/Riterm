@@ -22,12 +22,13 @@ use winit::event_loop::{ActiveEventLoop, ControlFlow};
 use winit::keyboard::{Key, ModifiersState, NamedKey};
 use winit::window::{UserAttentionType, Window};
 
+use crate::badge;
 use crate::input::{Action, action_for, default_bindings, encode_key, paste_bytes};
 use crate::layout::{PaneNode, Rect, SplitDir};
 use crate::notifications;
 use crate::render::{Renderer, TabInfo};
 use crate::search;
-use crate::statusbar::StatusBarState;
+use crate::statusbar::{self, StatusBarState};
 use crate::triggers::{self, CompiledTrigger, TriggerScanner};
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -135,6 +136,8 @@ pub struct App {
     copy_mode: Option<CopyState>,
     status_bar: StatusBarState,
     status_bar_next: Instant,
+    local_host: String,
+    local_user: String,
 }
 
 impl App {
@@ -190,6 +193,8 @@ impl App {
             copy_mode: None,
             status_bar: StatusBarState::new(),
             status_bar_next: Instant::now() + Duration::from_secs(1),
+            local_host: statusbar::hostname(),
+            local_user: statusbar::username(),
         }
     }
 
@@ -1550,6 +1555,14 @@ impl App {
                         highlights,
                         copy_cursor,
                     );
+
+                    let badge = badge::text_for_session(
+                        &profile,
+                        session,
+                        &self.local_host,
+                        &self.local_user,
+                    );
+                    renderer.prepare_badge(*id, &badge, &profile, *rect);
                 }
             }
         }

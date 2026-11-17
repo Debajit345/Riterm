@@ -11,6 +11,24 @@ __RITERM_ZSH_LOADED=1
 
 autoload -Uz add-zsh-hook
 
+# Usage: iterm2_set_user_var key value
+# The value is base64-encoded as iTerm2 expects. Use it in a badge with
+# \(user.key).
+iterm2_set_user_var() {
+    local encoded
+    encoded=$(printf '%s' "$2" | base64 | tr -d '\n')
+    printf '\033]1337;SetUserVar=%s=%s\007' "$1" "$encoded"
+}
+
+# Usage: riterm_set_badge 'format'
+# The format may contain interpolations such as \(session.path). Passing an
+# empty string clears the badge.
+riterm_set_badge() {
+    local encoded
+    encoded=$(printf '%s' "$1" | base64 | tr -d '\n')
+    printf '\033]1337;SetBadgeFormat=%s\007' "$encoded"
+}
+
 __riterm_preexec() {
     __riterm_command_started=1
     printf '\033]133;C\007'

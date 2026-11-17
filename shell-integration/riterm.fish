@@ -15,6 +15,20 @@ if set -q __RITERM_FISH_LOADED
 end
 set -g __RITERM_FISH_LOADED 1
 
+# Usage: iterm2_set_user_var key value
+# The value is base64-encoded as iTerm2 expects. Use it in a badge with
+# \(user.key).
+function iterm2_set_user_var
+    printf '\033]1337;SetUserVar=%s=%s\007' $argv[1] (printf '%s' $argv[2] | base64 | tr -d '\n')
+end
+
+# Usage: riterm_set_badge 'format'
+# The format may contain interpolations such as \(session.path). Passing an
+# empty string clears the badge.
+function riterm_set_badge
+    printf '\033]1337;SetBadgeFormat=%s\007' (printf '%s' $argv[1] | base64 | tr -d '\n')
+end
+
 function __riterm_preexec --on-event fish_preexec
     printf '\033]133;C\007'
 end

@@ -381,7 +381,7 @@ fn read_head(path: &Path) -> Option<String> {
     (!hash.is_empty()).then_some(hash)
 }
 
-fn hostname() -> String {
+pub(crate) fn hostname() -> String {
     fs::read_to_string("/proc/sys/kernel/hostname")
         .ok()
         .map(|host| host.trim().to_string())
@@ -390,7 +390,7 @@ fn hostname() -> String {
         .unwrap_or_else(|| "localhost".to_string())
 }
 
-fn username() -> String {
+pub(crate) fn username() -> String {
     std::env::var("USER")
         .or_else(|_| std::env::var("LOGNAME"))
         .unwrap_or_else(|_| "user".to_string())

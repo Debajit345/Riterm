@@ -11,6 +11,7 @@ use anyhow::{Context, Result};
 use riterm_config::{Config, ItermColors, ResolvedProfile, StatusBarPosition, ThemeVariant};
 use riterm_core::{Session, SessionConfig, SessionSink};
 
+use crate::badge;
 use crate::layout::Rect;
 use crate::render::{Renderer, TabInfo};
 use crate::statusbar::StatusBarState;
@@ -23,7 +24,14 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
     let mut profile = config.resolve(&config.general.default_profile);
     let show_status_bar = profile.status_bar || std::env::var_os("RITERM_RENDER_STATUS").is_some();
     profile.status_bar = show_status_bar;
-    let secondary = preset_profile(&profile, "Solarized Dark");
+    let show_badge = std::env::var_os("RITERM_RENDER_BADGE").is_some();
+    if show_badge {
+        profile.badge_text = r"\(user.env)".to_string();
+    }
+    let mut secondary = preset_profile(&profile, "Solarized Dark");
+    if show_badge {
+        secondary.badge_text = r"\(user.env)".to_string();
+    }
 
     let mut renderer = Renderer::new_offscreen(width, height, 1.0)?;
 
@@ -119,6 +127,12 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
         None,
     );
     renderer.prepare_session(&mut alternate, right, &secondary, PADDING, false, &[], None);
+    if show_badge {
+        let badge = badge::text_for_session(&profile, &primary, "studio", "me");
+        renderer.prepare_badge(1, &badge, &profile, left);
+        let badge = badge::text_for_session(&secondary, &alternate, "studio", "me");
+        renderer.prepare_badge(2, &badge, &secondary, right);
+    }
     renderer.push_quad(
         Rect::new(split - 1.0, content_top, 1.0, content_height),
         profile.foreground.mix(profile.background, 0.72),
@@ -231,6 +245,8 @@ fn primary_screen() -> Vec<u8> {
     s.push_str("\x1b]7;file://studio/home/debaxoid/projects/riterm\x07");
     s.push_str("\x1b]133;D;0\x07");
     s.push_str("\x1b]133;A\x07");
+    // Badge demo data: OSC 1337;SetUserVar=env=REVW ("DEV").
+    s.push_str("\x1b]1337;SetUserVar=env=REVW\x07");
     s.into_bytes()
 }
 
@@ -248,6 +264,8 @@ fn secondary_screen() -> Vec<u8> {
     s.push_str("shell-integration\r\n");
     s.push_str("\r\n");
     s.push_str("\x1b[38;5;136m$\x1b[0m ");
+    // Badge demo data: OSC 1337;SetUserVar=env=U1RBR0U= ("STAGE").
+    s.push_str("\x1b]1337;SetUserVar=env=U1RBR0U=\x07");
     s.into_bytes()
 }
 

@@ -297,7 +297,22 @@ pub struct Profile {
     pub cursor_guide: Option<String>,
     /// Draw a horizontal guide line across the cursor's row.
     pub cursor_guide_enabled: Option<bool>,
+    /// Badge text color.
     pub badge: Option<String>,
+    /// Badge template; supports iTerm2-style `\(session.path)` variables.
+    pub badge_text: Option<String>,
+    /// Badge font family. iTerm2 defaults to Helvetica in bold.
+    pub badge_font: Option<String>,
+    /// Badge text opacity, 0.0 to 1.0.
+    pub badge_opacity: Option<f32>,
+    /// Space between the top of the pane and the badge, in logical pixels.
+    pub badge_top_margin: Option<f32>,
+    /// Space between the right of the pane and the badge, in logical pixels.
+    pub badge_right_margin: Option<f32>,
+    /// Maximum badge width as a fraction of the pane width.
+    pub badge_max_width: Option<f32>,
+    /// Maximum badge height as a fraction of the pane height.
+    pub badge_max_height: Option<f32>,
     /// Exactly 16 ANSI colors, or any prefix (remaining colors keep defaults).
     pub palette: Option<Vec<String>>,
     pub cursor_shape: Option<CursorShapeSetting>,
@@ -387,6 +402,27 @@ impl Profile {
         if let Some(v) = self.badge.as_deref().and_then(Rgb::parse) {
             target.badge = v;
         }
+        if let Some(v) = &self.badge_text {
+            target.badge_text = v.clone();
+        }
+        if let Some(v) = &self.badge_font {
+            target.badge_font = if v.is_empty() { None } else { Some(v.clone()) };
+        }
+        if let Some(v) = self.badge_opacity {
+            target.badge_opacity = v.clamp(0.0, 1.0);
+        }
+        if let Some(v) = self.badge_top_margin {
+            target.badge_top_margin = v.max(0.0);
+        }
+        if let Some(v) = self.badge_right_margin {
+            target.badge_right_margin = v.max(0.0);
+        }
+        if let Some(v) = self.badge_max_width {
+            target.badge_max_width = v.clamp(0.01, 1.0);
+        }
+        if let Some(v) = self.badge_max_height {
+            target.badge_max_height = v.clamp(0.0, 1.0);
+        }
         if let Some(palette) = &self.palette {
             for (slot, value) in target.palette.iter_mut().zip(palette) {
                 if let Some(rgb) = Rgb::parse(value) {
@@ -458,6 +494,13 @@ pub struct ResolvedProfile {
     pub cursor_guide: Rgb,
     pub cursor_guide_enabled: bool,
     pub badge: Rgb,
+    pub badge_text: String,
+    pub badge_font: Option<String>,
+    pub badge_opacity: f32,
+    pub badge_top_margin: f32,
+    pub badge_right_margin: f32,
+    pub badge_max_width: f32,
+    pub badge_max_height: f32,
     pub palette: [Rgb; 16],
     pub cursor_shape: CursorShapeSetting,
     pub cursor_blink: bool,
@@ -510,6 +553,13 @@ impl Default for ResolvedProfile {
             cursor_guide: Rgb::parse("#60cdf0").unwrap(),
             cursor_guide_enabled: false,
             badge: Rgb::parse("#faa6a6").unwrap(),
+            badge_text: String::new(),
+            badge_font: Some("Helvetica".into()),
+            badge_opacity: 0.5,
+            badge_top_margin: 10.0,
+            badge_right_margin: 10.0,
+            badge_max_width: 0.5,
+            badge_max_height: 0.2,
             palette,
             cursor_shape: CursorShapeSetting::Block,
             cursor_blink: false,
@@ -729,6 +779,18 @@ line_height = 1.2
 # command, clock, host, user, load, memory, battery, session, custom:text.
 # status_bar = true
 # status_bar_components = ["cwd", "git", "spacer", "command", "clock"]
+#
+# Badges are large text drawn in the top-right of the pane. The template
+# supports iTerm2 interpolations such as \(session.path), \(session.hostname),
+# and \(user.name) for variables set with OSC 1337;SetUserVar.
+# badge_text = '\(session.path)'
+# badge = "#faa6a6"              # text color
+# badge_font = "Helvetica"       # rendered bold, like iTerm2
+# badge_opacity = 0.5
+# badge_top_margin = 10.0
+# badge_right_margin = 10.0
+# badge_max_width = 0.5          # fraction of the pane
+# badge_max_height = 0.2         # fraction of the pane
 
 [profiles.Work]
 font_size = 14.0
@@ -852,6 +914,40 @@ status_bar_components = ["cwd", "git", "spacer", "command", "clock", "custom:pro
                 StatusBarComponent::Custom("prod".into()),
             ]
         );
+    }
+
+    #[test]
+    fn badge_settings_parse_and_clamp() {
+        let config: Config = toml::from_str(
+            r#"
+[profile]
+badge_text = '\(session.path)'
+badge_font = "Menlo"
+badge_opacity = 1.4
+badge_top_margin = 14.0
+badge_right_margin = -3.0
+badge_max_width = 0.65
+badge_max_height = 1.5
+"#,
+        )
+        .expect("badge config parses");
+        let profile = config.resolve("Default");
+        assert_eq!(profile.badge_text, r"\(session.path)");
+        assert_eq!(profile.badge_font.as_deref(), Some("Menlo"));
+        assert_eq!(profile.badge_opacity, 1.0);
+        assert_eq!(profile.badge_top_margin, 14.0);
+        assert_eq!(profile.badge_right_margin, 0.0);
+        assert_eq!(profile.badge_max_width, 0.65);
+        assert_eq!(profile.badge_max_height, 1.0);
+
+        let defaults = ResolvedProfile::default();
+        assert_eq!(defaults.badge_text, "");
+        assert_eq!(defaults.badge_font.as_deref(), Some("Helvetica"));
+        assert_eq!(defaults.badge_opacity, 0.5);
+        assert_eq!(defaults.badge_top_margin, 10.0);
+        assert_eq!(defaults.badge_right_margin, 10.0);
+        assert_eq!(defaults.badge_max_width, 0.5);
+        assert_eq!(defaults.badge_max_height, 0.2);
     }
 
     #[test]

@@ -7,6 +7,8 @@
 //!   OSC 133 ; D [ ; exit ] ST   command finished
 //!   OSC 7 ; file://host/path ST current working directory (URL-encoded)
 //!   OSC 1337 ; CurrentDir=path ST  legacy current working directory
+//!   OSC 1337 ; SetUserVar=name=base64 ST set a user variable
+//!   OSC 1337 ; SetBadgeFormat=base64 ST set the session badge format
 //!
 //! The scanner is deliberately independent of the VT parser: it only reports
 //! byte offsets where a complete sequence ends, so the caller can feed the
@@ -56,6 +58,16 @@ pub enum ScanItem {
         user: Option<String>,
         host: Option<String>,
     },
+    /// `1337;SetUserVar=name=base64` ends here. A missing value unsets the
+    /// variable, matching iTerm2.
+    UserVariable {
+        end: usize,
+        name: String,
+        value: Option<String>,
+    },
+    /// `1337;SetBadgeFormat=base64` ends here. The decoded format may contain
+    /// `\(...)` interpolations.
+    BadgeFormat { end: usize, format: String },
 }
 
 /// The pieces of an OSC 7 `file://[user@]host/path` URL.
@@ -138,6 +150,37 @@ fn parse_current_dir(payload: &str) -> Option<String> {
     } else {
         Some(value.to_string())
     }
+}
+
+/// Decode an iTerm2 base64 payload as UTF-8. iTerm2's `SetUserVar` and
+/// `SetBadgeFormat` both carry UTF-8 text in standard base64.
+fn decode_base64_text(encoded: &str) -> Option<String> {
+    use base64::Engine as _;
+    let standard = base64::engine::general_purpose::STANDARD;
+    let bytes = standard
+        .decode(encoded)
+        .or_else(|_| base64::engine::general_purpose::STANDARD_NO_PAD.decode(encoded))
+        .ok()?;
+    String::from_utf8(bytes).ok()
+}
+
+/// Parse `1337;SetUserVar=name[=base64]`. iTerm2 forbids `.` in the name and
+/// stores the result as `user.<name>`; the scanner reports the bare name.
+fn parse_user_var(payload: &str) -> Option<(String, Option<String>)> {
+    let rest = payload.strip_prefix("1337;SetUserVar=")?;
+    let (name, value) = match rest.split_once('=') {
+        Some((name, encoded)) => (name, Some(decode_base64_text(encoded)?)),
+        None => (rest, None),
+    };
+    if name.is_empty() || name.contains('.') {
+        return None;
+    }
+    Some((name.to_string(), value))
+}
+
+fn parse_badge_format(payload: &str) -> Option<String> {
+    let encoded = payload.strip_prefix("1337;SetBadgeFormat=")?;
+    decode_base64_text(encoded)
 }
 
 fn percent_decode(input: &[u8]) -> Vec<u8> {
@@ -272,6 +315,10 @@ impl OscScanner {
                 user: None,
                 host: None,
             });
+        } else if let Some((name, value)) = parse_user_var(&payload) {
+            items.push(ScanItem::UserVariable { end, name, value });
+        } else if let Some(format) = parse_badge_format(&payload) {
+            items.push(ScanItem::BadgeFormat { end, format });
         }
     }
 }
@@ -390,5 +437,72 @@ mod tests {
         let mut s = OscScanner::new();
         assert!(s.scan(b"\x1b]7;file://host\x07").is_empty());
         assert!(s.scan(b"\x1b]7;https://example.com/x\x07").is_empty());
+    }
+
+    fn b64(text: &str) -> String {
+        use base64::Engine as _;
+        base64::engine::general_purpose::STANDARD.encode(text)
+    }
+
+    #[test]
+    fn parses_set_user_var() {
+        let mut s = OscScanner::new();
+        let sequence = format!("\x1b]1337;SetUserVar=host_name={}\x07", b64("studio"));
+        let items = s.scan(sequence.as_bytes());
+        assert!(matches!(
+            &items[..],
+            [ScanItem::UserVariable { name, value: Some(value), end }]
+                if name == "host_name" && value == "studio" && *end == sequence.len()
+        ));
+    }
+
+    #[test]
+    fn unset_user_var_has_no_value() {
+        let mut s = OscScanner::new();
+        let items = s.scan(b"\x1b]1337;SetUserVar=host_name\x07");
+        assert!(matches!(
+            &items[..],
+            [ScanItem::UserVariable { name, value: None, .. }] if name == "host_name"
+        ));
+    }
+
+    #[test]
+    fn rejects_dotted_and_malformed_user_vars() {
+        let mut s = OscScanner::new();
+        assert!(
+            s.scan(b"\x1b]1337;SetUserVar=user.host=YWxpY2U=\x07")
+                .is_empty()
+        );
+        assert!(
+            s.scan(b"\x1b]1337;SetUserVar=name=not!base64\x07")
+                .is_empty()
+        );
+        assert!(s.scan(b"\x1b]1337;SetUserVar=\x07").is_empty());
+    }
+
+    #[test]
+    fn parses_set_badge_format() {
+        let mut s = OscScanner::new();
+        let format = r"\(session.path)";
+        let sequence = format!("\x1b]1337;SetBadgeFormat={}\x07", b64(format));
+        let items = s.scan(sequence.as_bytes());
+        assert!(matches!(
+            &items[..],
+            [ScanItem::BadgeFormat { format: parsed, .. }] if parsed == format
+        ));
+    }
+
+    #[test]
+    fn user_var_and_badge_may_be_split_across_reads() {
+        let mut s = OscScanner::new();
+        assert!(s.scan(b"\x1b]1337;SetUserVar=na").is_empty());
+        let encoded = b64("value");
+        let tail = format!("me={encoded}\x07");
+        let items = s.scan(tail.as_bytes());
+        assert!(matches!(
+            &items[..],
+            [ScanItem::UserVariable { name, value: Some(value), .. }]
+                if name == "name" && value == "value"
+        ));
     }
 }

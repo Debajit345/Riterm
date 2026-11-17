@@ -1,6 +1,7 @@
 //! Riterm — an iTerm2-style terminal emulator for Linux.
 
 mod app;
+mod badge;
 mod input;
 mod layout;
 mod notifications;
@@ -200,6 +201,13 @@ fn merge_profile(target: &mut Profile, source: &Profile) {
         cursor_guide,
         cursor_guide_enabled,
         badge,
+        badge_text,
+        badge_font,
+        badge_opacity,
+        badge_top_margin,
+        badge_right_margin,
+        badge_max_width,
+        badge_max_height,
         palette,
         cursor_shape,
         cursor_blink,

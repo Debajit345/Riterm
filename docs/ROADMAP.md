@@ -53,6 +53,8 @@ Target: replace a normal terminal for everyday work.
 - [x] Word/URL selection and middle-click paste
 - [x] Desktop notifications for command finish and BEL
 - [x] OSC 7 / `1337;CurrentDir` current-directory tracking, including remote user/host
+- [x] Badges with profile colors, fonts, opacity, margins, auto-sizing, and `OSC 1337;SetBadgeFormat`
+- [x] User variables with `OSC 1337;SetUserVar` and `\(user.name)` badge interpolation
 
 ## Milestone 3 — iTerm2 power features
 
@@ -66,7 +68,7 @@ Target: the features that make iTerm2 distinctive.
 - [ ] Triggers: highlight, annotate, run command
 - [ ] Inline images: iTerm2 image protocol, then sixel
 - [x] Status bar with components (cwd, git, command status, clock, host, user, load, memory, battery, session, spacers, custom text)
-- [ ] Badges and user variables (OSC 1337 SetUserVar)
+- [x] Badges and user variables (OSC 1337 SetUserVar)
 - [ ] Shell utilities: `imgcat`, `it2copy`, `it2dl`, `it2getvar`
 - [ ] Semantic/block selection
 - [ ] Automatic profile switching (host, user, directory)
