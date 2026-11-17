@@ -34,6 +34,25 @@ pub const ITERM2_DEFAULT_PALETTE: [&str; 16] = [
 /// Backwards-compatible alias for the default palette.
 pub const DEFAULT_PALETTE: [&str; 16] = ITERM2_DEFAULT_PALETTE;
 
+/// How a background image is mapped onto a session.
+///
+/// Names mirror iTerm2's four background image modes.
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "snake_case")]
+pub enum BackgroundImageMode {
+    /// Stretch the image to exactly fill the pane, ignoring aspect ratio.
+    #[default]
+    Stretch,
+    /// Repeat the image at its natural pixel size.
+    Tile,
+    /// Scale the image to cover the pane, cropping the overflow.
+    #[serde(alias = "fill", alias = "scale_to_fill")]
+    ScaleFill,
+    /// Scale the image until it fits inside the pane, letterboxing the rest.
+    #[serde(alias = "fit", alias = "scale_to_fit")]
+    ScaleFit,
+}
+
 /// Action taken when an output trigger matches.
 #[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
 #[serde(rename_all = "lowercase")]
@@ -164,8 +183,14 @@ pub struct Profile {
     pub cursor_blink: Option<bool>,
     /// Scrollback lines; `0` means unlimited.
     pub scrollback: Option<usize>,
+    /// Window opacity, 1.0 (opaque) to 0.0 (fully transparent).
     pub background_opacity: Option<f32>,
+    /// Path to a PNG background image.
     pub background_image: Option<String>,
+    /// How the background image is mapped onto the pane.
+    pub background_image_mode: Option<BackgroundImageMode>,
+    /// Blend between the background color (0.0) and the image (1.0).
+    pub background_image_blend: Option<f32>,
     /// Minimum foreground/background contrast, 0.0 (off) to 1.0.
     pub minimum_contrast: Option<f32>,
     pub shell: Option<String>,
@@ -259,6 +284,12 @@ impl Profile {
         if let Some(v) = &self.background_image {
             target.background_image = if v.is_empty() { None } else { Some(v.clone()) };
         }
+        if let Some(v) = self.background_image_mode {
+            target.background_image_mode = v;
+        }
+        if let Some(v) = self.background_image_blend {
+            target.background_image_blend = v.clamp(0.0, 1.0);
+        }
         if let Some(v) = self.minimum_contrast {
             target.minimum_contrast = v.clamp(0.0, 1.0);
         }
@@ -302,6 +333,8 @@ pub struct ResolvedProfile {
     pub scrollback: usize,
     pub background_opacity: f32,
     pub background_image: Option<String>,
+    pub background_image_mode: BackgroundImageMode,
+    pub background_image_blend: f32,
     pub minimum_contrast: f32,
     pub shell: Option<String>,
     pub working_directory: Option<String>,
@@ -350,6 +383,8 @@ impl Default for ResolvedProfile {
             scrollback: 1000,
             background_opacity: 1.0,
             background_image: None,
+            background_image_mode: BackgroundImageMode::Stretch,
+            background_image_blend: 0.5,
             minimum_contrast: 0.0,
             shell: None,
             working_directory: None,
@@ -539,6 +574,10 @@ line_height = 1.2
 # link = "#328eee"
 # cursor_shape = "block"
 # cursor_blink = false
+# background_opacity = 1.0
+# background_image = "~/Pictures/terminal.png"
+# background_image_mode = "stretch"  # stretch | tile | scale_fill | scale_fit
+# background_image_blend = 0.5        # 0.0 = color only, 1.0 = image only
 # minimum_contrast = 0.0
 
 [profiles.Work]
@@ -594,6 +633,42 @@ text = "Build failed"
         assert_eq!(trigger.action, TriggerAction::Bell);
         assert_eq!(trigger.text.as_deref(), Some("Build failed"));
         assert!(trigger.enabled);
+    }
+
+    #[test]
+    fn background_image_settings_parse_and_clamp() {
+        let config: Config = toml::from_str(
+            r#"
+[profile]
+background_image = "/tmp/bg.png"
+background_image_mode = "scale_fit"
+background_image_blend = 1.4
+background_opacity = 0.6
+"#,
+        )
+        .expect("background config parses");
+        let profile = config.resolve("Default");
+        assert_eq!(profile.background_image.as_deref(), Some("/tmp/bg.png"));
+        assert_eq!(profile.background_image_mode, BackgroundImageMode::ScaleFit);
+        assert_eq!(profile.background_image_blend, 1.0);
+        assert_eq!(profile.background_opacity, 0.6);
+    }
+
+    #[test]
+    fn background_image_mode_accepts_short_aliases() {
+        for (name, expected) in [
+            ("stretch", BackgroundImageMode::Stretch),
+            ("tile", BackgroundImageMode::Tile),
+            ("fill", BackgroundImageMode::ScaleFill),
+            ("fit", BackgroundImageMode::ScaleFit),
+            ("scale_to_fill", BackgroundImageMode::ScaleFill),
+            ("scale_to_fit", BackgroundImageMode::ScaleFit),
+        ] {
+            let config: Config =
+                toml::from_str(&format!("[profile]\nbackground_image_mode = {name:?}\n"))
+                    .expect("mode parses");
+            assert_eq!(config.resolve("Default").background_image_mode, expected);
+        }
     }
 
     #[test]

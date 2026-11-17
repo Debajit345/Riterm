@@ -138,6 +138,25 @@ windows record the epoch without notifying, so an old completion is never
 replayed after the window loses focus. The notification body uses the duration
 between the last `C` and `D` marks and reports failures regardless of duration.
 
+## Background images and transparency
+
+`background.wgsl` receives the pane rectangle, image dimensions, background
+color, opacity, blend, and mode. It computes the image UVs for stretch, tile,
+scale-to-fill, and scale-to-fit in the fragment shader, mixes the sampled image
+with the background color by `blend * image.a`, and writes the result with the
+profile opacity. That makes the whole background a single source-over layer, so
+opacity is applied exactly once and letterboxed areas use the background color
+instead of exposing the desktop.
+
+The PNG decoder expands palette, grayscale, and low-bit-depth images to 8-bit
+RGBA. Textures use non-sRGB `Rgba8Unorm` because Riterm's render targets receive
+sRGB bytes directly; sampling an sRGB texture would linearise the image and
+darken it. The image cache reloads when the file's mtime changes. Window
+transparency is requested from winit only when some profile has
+`background_opacity < 1.0`, and the swapchain prefers `PreMultiplied` alpha.
+Offscreen render checks force opacity to 1 except when
+`RITERM_RENDER_OPACITY` is set for pipeline verification.
+
 ## Rendering
 
 Each frame:
@@ -147,11 +166,16 @@ Each frame:
    pane rectangle and font metrics, resizes the PTY/terminal if needed, and
    rebuilds the pane's segments only when the session is dirty, metrics/size
    changed, or cursor visibility changed.
-3. Cell backgrounds, selection, cursor shapes, dividers, and the tab bar are
+3. If a profile has a background image, `ensure_background_image` decodes the
+   PNG once (cached by path and modification time), uploads an `Rgba8Unorm`
+   texture, and `prepare_session` records a background quad.
+4. Cell backgrounds, selection, cursor shapes, dividers, and the tab bar are
    pushed as colored quads.
-4. Quads are uploaded to a vertex buffer and drawn with the `quads.wgsl`
-   pipeline; glyphon prepares text areas and renders them in the same pass.
-5. `queue.submit` and `queue.present`.
+5. The background pipeline draws image quads first and blends them with the
+   profile background in the shader. The quad pipeline then draws cell
+   backgrounds and chrome, and glyphon prepares text areas and renders them in
+   the same pass.
+6. `queue.submit` and `queue.present`.
 
 ### Fonts
 

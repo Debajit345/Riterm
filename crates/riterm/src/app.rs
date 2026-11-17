@@ -202,8 +202,12 @@ impl App {
                     }
                 }
                 self.compiled_triggers = triggers::compile(&config.triggers);
+                let transparent = wants_transparency(&config);
                 self.config = config;
                 self.bindings = bindings;
+                if let Some(window) = &self.window {
+                    window.set_transparent(transparent);
+                }
                 self.mark_all_dirty();
                 self.update_title();
                 self.request_redraw();
@@ -1430,7 +1434,7 @@ impl App {
         renderer.cancel_frame();
 
         if self.tabs.is_empty() {
-            let _ = renderer.render(Rgb::BLACK);
+            let _ = renderer.render(Rgb::BLACK, 1.0);
             return;
         }
 
@@ -1536,7 +1540,7 @@ impl App {
             }
         }
 
-        if let Err(err) = renderer.render(profile.background) {
+        if let Err(err) = renderer.render(profile.background, profile.background_opacity) {
             warn!("render failed: {err:#}");
         }
     }
@@ -1824,6 +1828,7 @@ impl ApplicationHandler<UserEvent> for App {
 
         let mut attributes = Window::default_attributes()
             .with_title("Riterm")
+            .with_transparent(wants_transparency(&self.config))
             .with_inner_size(LogicalSize::new(1100.0, 700.0));
         #[cfg(all(unix, not(target_os = "macos")))]
         {
@@ -1977,6 +1982,20 @@ fn anchored_mark_point(mark: &Mark, history: usize) -> Point {
     Point::new(Line(line), mark.point.column)
 }
 
+/// Whether any profile asks for a translucent window. Checked at startup and
+/// on config reload so the compositor gets the right surface kind.
+fn wants_transparency(config: &Config) -> bool {
+    config
+        .profile
+        .background_opacity
+        .is_some_and(|opacity| opacity < 1.0)
+        || config.profiles.values().any(|profile| {
+            profile
+                .background_opacity
+                .is_some_and(|opacity| opacity < 1.0)
+        })
+}
+
 fn notification_summary(title: &str) -> String {
     let title = title.trim();
     if title.is_empty() || title == "Riterm" {
@@ -2120,6 +2139,26 @@ mod tests {
         // Content moves up by four lines while history grows by four.
         let point = anchored_mark_point(&mark, 24);
         assert_eq!(point, Point::new(Line(-7), Column(7)));
+    }
+
+    #[test]
+    fn transparency_follows_profile_opacity() {
+        use riterm_config::Config;
+
+        let mut config = Config::default();
+        assert!(!super::wants_transparency(&config));
+        config.profile.background_opacity = Some(1.0);
+        assert!(!super::wants_transparency(&config));
+        config.profile.background_opacity = Some(0.85);
+        assert!(super::wants_transparency(&config));
+
+        let mut config = Config::default();
+        config
+            .profiles
+            .entry("Work".into())
+            .or_default()
+            .background_opacity = Some(0.5);
+        assert!(super::wants_transparency(&config));
     }
 
     #[test]

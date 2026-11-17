@@ -1,7 +1,9 @@
 //! GPU renderer: cell backgrounds/cursor/selection as quads, text via glyphon.
 
 use std::collections::HashMap;
+use std::path::{Path, PathBuf};
 use std::sync::Arc;
+use std::time::{Duration, Instant, SystemTime};
 
 use alacritty_terminal::grid::Dimensions;
 use alacritty_terminal::index::{Column, Point};
@@ -16,7 +18,7 @@ use glyphon::{
     Attrs, Buffer, Cache, Color, Family, FontSystem, Metrics, Resolution, Shaping, Style,
     SwashCache, TextArea, TextAtlas, TextBounds, TextRenderer, Viewport, Weight,
 };
-use riterm_config::{ResolvedProfile, Rgb};
+use riterm_config::{BackgroundImageMode, ResolvedProfile, Rgb};
 use riterm_core::{MarkKind, Session};
 use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
@@ -34,6 +36,41 @@ struct QuadVertex {
 struct Quad {
     rect: Rect,
     color: [f32; 4],
+}
+
+#[repr(C)]
+#[derive(Clone, Copy, Debug, Pod, Zeroable)]
+struct BackgroundVertex {
+    position: [f32; 2],
+    uv: [f32; 2],
+    background: [f32; 4],
+    rect_size: [f32; 2],
+    image_size: [f32; 2],
+    /// `mode`, `blend`, `opacity`, unused.
+    params: [f32; 4],
+}
+
+#[derive(Clone, Copy, Debug)]
+struct Background {
+    rect: Rect,
+    color: Rgb,
+    mode: BackgroundImageMode,
+    blend: f32,
+    opacity: f32,
+}
+
+struct LoadedBackgroundImage {
+    width: u32,
+    height: u32,
+    bind_group: wgpu::BindGroup,
+    _texture: wgpu::Texture,
+}
+
+struct BackgroundImageState {
+    path: PathBuf,
+    modified: Option<SystemTime>,
+    checked_at: Instant,
+    image: Option<LoadedBackgroundImage>,
 }
 
 #[derive(Clone, Copy, Debug, PartialEq, Eq, Hash)]
@@ -162,12 +199,21 @@ pub struct Renderer {
     quads: Vec<Quad>,
     text_specs: Vec<AreaSpec>,
 
+    background_pipeline: wgpu::RenderPipeline,
+    background_bind_layout: wgpu::BindGroupLayout,
+    background_sampler: wgpu::Sampler,
+    background_buffer: Option<wgpu::Buffer>,
+    background_capacity: usize,
+    backgrounds: Vec<Background>,
+    background_image: Option<BackgroundImageState>,
+
     session_buffers: HashMap<u64, SessionBuffer>,
     tab_buffer: Option<Buffer>,
     overlay_buffer: Option<Buffer>,
     metrics_cache: HashMap<FontKey, FontMetrics>,
     families_cache: HashMap<u64, ResolvedFamilies>,
     cursor_visible: bool,
+    preserve_alpha: bool,
     scale: f64,
     surface_size: (u32, u32),
 }
@@ -200,6 +246,14 @@ impl Renderer {
             .find(TextureFormatExt::is_unorm)
             .or_else(|| caps.formats.iter().copied().find(TextureFormatExt::is_srgb))
             .unwrap_or(caps.formats[0]);
+        // Prefer premultiplied alpha so window transparency composites
+        // correctly; opaque surfaces still work because alpha stays at 1.
+        let alpha_mode = caps
+            .alpha_modes
+            .iter()
+            .copied()
+            .find(|mode| *mode == wgpu::CompositeAlphaMode::PreMultiplied)
+            .unwrap_or(caps.alpha_modes[0]);
         let size = window.inner_size();
         let surface_config = wgpu::SurfaceConfiguration {
             usage: wgpu::TextureUsages::RENDER_ATTACHMENT,
@@ -207,7 +261,7 @@ impl Renderer {
             width: size.width.max(1),
             height: size.height.max(1),
             present_mode: wgpu::PresentMode::Fifo,
-            alpha_mode: caps.alpha_modes[0],
+            alpha_mode,
             view_formats: Vec::new(),
             desired_maximum_frame_latency: 2,
             color_space: wgpu::SurfaceColorSpace::Auto,
@@ -280,6 +334,19 @@ impl Renderer {
         let text_renderer =
             TextRenderer::new(&mut atlas, &device, wgpu::MultisampleState::default(), None);
         let quad_pipeline = create_quad_pipeline(&device, format);
+        let background_bind_layout = create_background_bind_layout(&device);
+        let background_sampler = device.create_sampler(&wgpu::SamplerDescriptor {
+            label: Some("riterm background sampler"),
+            address_mode_u: wgpu::AddressMode::Repeat,
+            address_mode_v: wgpu::AddressMode::Repeat,
+            address_mode_w: wgpu::AddressMode::Repeat,
+            mag_filter: wgpu::FilterMode::Linear,
+            min_filter: wgpu::FilterMode::Linear,
+            mipmap_filter: wgpu::MipmapFilterMode::Linear,
+            ..Default::default()
+        });
+        let background_pipeline =
+            create_background_pipeline(&device, format, &background_bind_layout);
 
         let mut renderer = Self {
             instance,
@@ -299,12 +366,20 @@ impl Renderer {
             quad_capacity: 0,
             quads: Vec::new(),
             text_specs: Vec::new(),
+            background_pipeline,
+            background_bind_layout,
+            background_sampler,
+            background_buffer: None,
+            background_capacity: 0,
+            backgrounds: Vec::new(),
+            background_image: None,
             session_buffers: HashMap::new(),
             tab_buffer: None,
             overlay_buffer: None,
             metrics_cache: HashMap::new(),
             families_cache: HashMap::new(),
             cursor_visible: true,
+            preserve_alpha: false,
             scale,
             surface_size: (0, 0),
         };
@@ -344,6 +419,13 @@ impl Renderer {
     /// non-blinking cursor is always drawn by [`Self::prepare_session`].
     pub fn set_cursor_visible(&mut self, visible: bool) {
         self.cursor_visible = visible;
+    }
+
+    /// Keep the profile opacity in offscreen readbacks. Used by the render
+    /// check to verify the transparency compositing; normal offscreen output
+    /// stays opaque.
+    pub fn set_preserve_alpha(&mut self, preserve: bool) {
+        self.preserve_alpha = preserve;
     }
 
     /// Cell size for a profile at the current scale factor.
@@ -431,9 +513,63 @@ impl Renderer {
         metrics
     }
 
+    /// Load (or refresh) the PNG background image for a profile. Returns
+    /// whether a texture is ready to draw. Failures are cached until the file's
+    /// path or modification time changes so a missing file does not re-decode
+    /// every frame.
+    fn ensure_background_image(&mut self, profile: &ResolvedProfile) -> bool {
+        let Some(raw) = profile.background_image.as_deref() else {
+            return false;
+        };
+        let path = expand_path(raw);
+
+        if let Some(state) = &self.background_image {
+            if state.path == path && state.checked_at.elapsed() < Duration::from_secs(1) {
+                return state.image.is_some();
+            }
+        }
+
+        let modified = std::fs::metadata(&path).and_then(|m| m.modified()).ok();
+        if let Some(state) = &self.background_image {
+            if state.path == path && state.modified == modified {
+                let loaded = state.image.is_some();
+                if let Some(state) = &mut self.background_image {
+                    state.checked_at = Instant::now();
+                }
+                return loaded;
+            }
+        }
+
+        let image = match load_background_image(
+            &self.device,
+            &self.queue,
+            &self.background_bind_layout,
+            &self.background_sampler,
+            &path,
+        ) {
+            Ok(image) => Some(image),
+            Err(err) => {
+                tracing::warn!(
+                    "could not load background image {}: {err:#}",
+                    path.display()
+                );
+                None
+            }
+        };
+        let loaded = image.is_some();
+        self.background_image = Some(BackgroundImageState {
+            path,
+            modified,
+            checked_at: Instant::now(),
+            image,
+        });
+        loaded
+    }
+
     pub fn cancel_frame(&mut self) {
         self.quads.clear();
         self.text_specs.clear();
+        self.backgrounds.clear();
     }
 
     pub fn push_quad(&mut self, rect: Rect, color: Rgb, alpha: f32) {
@@ -473,8 +609,25 @@ impl Renderer {
             metrics.cell_h.round().max(1.0) as u16,
         );
 
-        // Terminal background.
-        self.push_quad(rect, profile.background, 1.0);
+        // Pane background. A configured image is drawn (blended with the
+        // background color) beneath every cell and supplies the pane's base
+        // layer; otherwise a plain quad carries the background and opacity.
+        let has_image = profile.background_image.is_some() && self.ensure_background_image(profile);
+        if has_image {
+            self.backgrounds.push(Background {
+                rect,
+                color: profile.background,
+                mode: profile.background_image_mode,
+                blend: profile.background_image_blend,
+                opacity: profile.background_opacity,
+            });
+        } else {
+            self.push_quad(
+                rect,
+                profile.background,
+                profile.background_opacity.clamp(0.0, 1.0),
+            );
+        }
 
         // Rebuild text only when content changed or metrics changed.
         let needs_rebuild = session.dirty
@@ -984,7 +1137,7 @@ impl Renderer {
         self.session_buffers.remove(&id);
     }
 
-    pub fn render(&mut self, clear: Rgb) -> Result<()> {
+    pub fn render(&mut self, clear: Rgb, opacity: f32) -> Result<()> {
         let width = self.surface_config.width;
         let height = self.surface_config.height;
         if width == 0 || height == 0 {
@@ -1027,7 +1180,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("riterm frame"),
             });
-        self.draw(&mut encoder, &view, clear)?;
+        self.draw(&mut encoder, &view, clear, opacity)?;
         self.queue.submit(Some(encoder.finish()));
         self.queue.present(frame);
         self.atlas.trim();
@@ -1036,7 +1189,7 @@ impl Renderer {
 
     /// Render the queued frame into an offscreen texture and return its RGBA
     /// pixels, top row first.
-    pub fn render_offscreen(&mut self, clear: Rgb) -> Result<Vec<u8>> {
+    pub fn render_offscreen(&mut self, clear: Rgb, opacity: f32) -> Result<Vec<u8>> {
         let width = self.surface_config.width;
         let height = self.surface_config.height;
         if width == 0 || height == 0 {
@@ -1063,7 +1216,7 @@ impl Renderer {
             .create_command_encoder(&wgpu::CommandEncoderDescriptor {
                 label: Some("riterm offscreen frame"),
             });
-        self.draw(&mut encoder, &view, clear)?;
+        self.draw(&mut encoder, &view, clear, opacity)?;
 
         let unpadded_bytes_per_row = width * 4;
         let padded_bytes_per_row = unpadded_bytes_per_row
@@ -1141,9 +1294,82 @@ impl Renderer {
         encoder: &mut wgpu::CommandEncoder,
         view: &wgpu::TextureView,
         clear: Rgb,
+        opacity: f32,
     ) -> Result<()> {
         let width = self.surface_config.width;
         let height = self.surface_config.height;
+        // Offscreen targets (render checks and readback) stay fully opaque.
+        let opacity = if self.surface.is_some() || self.preserve_alpha {
+            opacity.clamp(0.0, 1.0)
+        } else {
+            1.0
+        };
+
+        // Background images are drawn beneath every quad. They are combined
+        // with the profile background color in the shader, so the whole
+        // background is one source-over layer at the profile opacity.
+        let mut background_vertices = Vec::new();
+        if let Some(image) = self
+            .background_image
+            .as_ref()
+            .and_then(|state| state.image.as_ref())
+        {
+            let image_size = [image.width as f32, image.height as f32];
+            for background in &self.backgrounds {
+                let x0 = background.rect.x / width as f32 * 2.0 - 1.0;
+                let x1 = (background.rect.x + background.rect.w) / width as f32 * 2.0 - 1.0;
+                let y0 = 1.0 - background.rect.y / height as f32 * 2.0;
+                let y1 = 1.0 - (background.rect.y + background.rect.h) / height as f32 * 2.0;
+                let corners = [
+                    ([x0, y0], [0.0, 0.0]),
+                    ([x1, y0], [1.0, 0.0]),
+                    ([x1, y1], [1.0, 1.0]),
+                    ([x0, y0], [0.0, 0.0]),
+                    ([x1, y1], [1.0, 1.0]),
+                    ([x0, y1], [0.0, 1.0]),
+                ];
+                for (position, uv) in corners {
+                    background_vertices.push(BackgroundVertex {
+                        position,
+                        uv,
+                        background: [
+                            background.color.r as f32 / 255.0,
+                            background.color.g as f32 / 255.0,
+                            background.color.b as f32 / 255.0,
+                            1.0,
+                        ],
+                        rect_size: [background.rect.w, background.rect.h],
+                        image_size,
+                        params: [
+                            background_mode_code(background.mode),
+                            background.blend.clamp(0.0, 1.0),
+                            background.opacity.clamp(0.0, 1.0),
+                            0.0,
+                        ],
+                    });
+                }
+            }
+        }
+        let has_background = !background_vertices.is_empty();
+
+        if has_background {
+            if self.background_buffer.is_none()
+                || self.background_capacity < background_vertices.len()
+            {
+                let capacity = background_vertices.len().next_power_of_two().max(64);
+                self.background_buffer = Some(self.device.create_buffer(&wgpu::BufferDescriptor {
+                    label: Some("riterm backgrounds"),
+                    size: (capacity * std::mem::size_of::<BackgroundVertex>()) as u64,
+                    usage: wgpu::BufferUsages::VERTEX | wgpu::BufferUsages::COPY_DST,
+                    mapped_at_creation: false,
+                }));
+                self.background_capacity = capacity;
+            }
+            if let Some(buffer) = &self.background_buffer {
+                self.queue
+                    .write_buffer(buffer, 0, bytemuck::cast_slice(&background_vertices));
+            }
+        }
 
         // Upload quads.
         let mut vertices = Vec::with_capacity(self.quads.len() * 6);
@@ -1235,11 +1461,19 @@ impl Renderer {
                     depth_slice: None,
                     resolve_target: None,
                     ops: wgpu::Operations {
-                        load: wgpu::LoadOp::Clear(wgpu::Color {
-                            r: clear.r as f64 / 255.0,
-                            g: clear.g as f64 / 255.0,
-                            b: clear.b as f64 / 255.0,
-                            a: 1.0,
+                        load: wgpu::LoadOp::Clear(if opacity >= 1.0 {
+                            wgpu::Color {
+                                r: clear.r as f64 / 255.0,
+                                g: clear.g as f64 / 255.0,
+                                b: clear.b as f64 / 255.0,
+                                a: 1.0,
+                            }
+                        } else {
+                            // Panes paint their own background (or image) with
+                            // the profile opacity. Transparent black avoids
+                            // tinting the straight-alpha source colours with
+                            // the clear colour during blending.
+                            wgpu::Color::TRANSPARENT
                         }),
                         store: wgpu::StoreOp::Store,
                     },
@@ -1249,6 +1483,21 @@ impl Renderer {
                 occlusion_query_set: None,
                 multiview_mask: None,
             });
+
+            if has_background {
+                if let Some(buffer) = &self.background_buffer {
+                    if let Some(image) = self
+                        .background_image
+                        .as_ref()
+                        .and_then(|state| state.image.as_ref())
+                    {
+                        pass.set_pipeline(&self.background_pipeline);
+                        pass.set_bind_group(0, &image.bind_group, &[]);
+                        pass.set_vertex_buffer(0, buffer.slice(..));
+                        pass.draw(0..background_vertices.len() as u32, 0..1);
+                    }
+                }
+            }
 
             if !vertices.is_empty() {
                 if let Some(buffer) = &self.quad_buffer {
@@ -1933,6 +2182,257 @@ fn text_attrs<'a>(
     attrs
 }
 
+fn expand_path(path: &str) -> PathBuf {
+    let path = path.trim();
+    if path == "~" {
+        return std::env::var_os("HOME")
+            .map(PathBuf::from)
+            .unwrap_or_else(|| PathBuf::from(path));
+    }
+    if let Some(rest) = path.strip_prefix("~/") {
+        if let Some(home) = std::env::var_os("HOME") {
+            return PathBuf::from(home).join(rest);
+        }
+    }
+    PathBuf::from(path)
+}
+
+fn background_mode_code(mode: BackgroundImageMode) -> f32 {
+    match mode {
+        BackgroundImageMode::Stretch => 0.0,
+        BackgroundImageMode::Tile => 1.0,
+        BackgroundImageMode::ScaleFill => 2.0,
+        BackgroundImageMode::ScaleFit => 3.0,
+    }
+}
+
+fn decode_png_rgba(path: &Path) -> Result<(u32, u32, Vec<u8>)> {
+    let file = std::fs::File::open(path).with_context(|| format!("opening {}", path.display()))?;
+    let file = std::io::BufReader::new(file);
+    let mut decoder = png::Decoder::new(file);
+    decoder.set_transformations(
+        png::Transformations::normalize_to_color8() | png::Transformations::ALPHA,
+    );
+    let mut reader = decoder
+        .read_info()
+        .with_context(|| format!("reading PNG header from {}", path.display()))?;
+    let size = reader
+        .output_buffer_size()
+        .context("PNG dimensions overflow the address space")?;
+    let mut buffer = vec![0u8; size];
+    let info = reader
+        .next_frame(&mut buffer)
+        .with_context(|| format!("decoding {}", path.display()))?;
+
+    let width = info.width;
+    let height = info.height;
+    let stride = info.line_size;
+    let pixels = &buffer[..info.buffer_size()];
+    let mut rgba = Vec::with_capacity(width as usize * height as usize * 4);
+    match info.color_type {
+        png::ColorType::Rgba => {
+            for row in pixels.chunks_exact(stride) {
+                rgba.extend_from_slice(&row[..width as usize * 4]);
+            }
+        }
+        png::ColorType::Rgb => {
+            for row in pixels.chunks_exact(stride) {
+                for pixel in row[..width as usize * 3].chunks_exact(3) {
+                    rgba.extend_from_slice(&[pixel[0], pixel[1], pixel[2], 255]);
+                }
+            }
+        }
+        png::ColorType::Grayscale => {
+            for row in pixels.chunks_exact(stride) {
+                for &value in &row[..width as usize] {
+                    rgba.extend_from_slice(&[value, value, value, 255]);
+                }
+            }
+        }
+        png::ColorType::GrayscaleAlpha => {
+            for row in pixels.chunks_exact(stride) {
+                for pixel in row[..width as usize * 2].chunks_exact(2) {
+                    rgba.extend_from_slice(&[pixel[0], pixel[0], pixel[0], pixel[1]]);
+                }
+            }
+        }
+        png::ColorType::Indexed => {
+            anyhow::bail!("indexed PNGs should have been expanded by the decoder");
+        }
+    }
+    Ok((width, height, rgba))
+}
+
+fn load_background_image(
+    device: &wgpu::Device,
+    queue: &wgpu::Queue,
+    layout: &wgpu::BindGroupLayout,
+    sampler: &wgpu::Sampler,
+    path: &Path,
+) -> Result<LoadedBackgroundImage> {
+    let (width, height, rgba) = decode_png_rgba(path)?;
+    let max = device.limits().max_texture_dimension_2d;
+    if width > max || height > max {
+        anyhow::bail!("image is {width}x{height}, larger than the GPU limit of {max}x{max}");
+    }
+    let texture = device.create_texture(&wgpu::TextureDescriptor {
+        label: Some("riterm background image"),
+        size: wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+        mip_level_count: 1,
+        sample_count: 1,
+        dimension: wgpu::TextureDimension::D2,
+        // The render targets are non-sRGB unorm formats that receive sRGB
+        // bytes directly, so the image texture must not be linearised either.
+        format: wgpu::TextureFormat::Rgba8Unorm,
+        usage: wgpu::TextureUsages::TEXTURE_BINDING | wgpu::TextureUsages::COPY_DST,
+        view_formats: &[],
+    });
+    queue.write_texture(
+        wgpu::TexelCopyTextureInfo {
+            texture: &texture,
+            mip_level: 0,
+            origin: wgpu::Origin3d::ZERO,
+            aspect: wgpu::TextureAspect::All,
+        },
+        &rgba,
+        wgpu::TexelCopyBufferLayout {
+            offset: 0,
+            bytes_per_row: Some(width * 4),
+            rows_per_image: Some(height),
+        },
+        wgpu::Extent3d {
+            width,
+            height,
+            depth_or_array_layers: 1,
+        },
+    );
+    let view = texture.create_view(&wgpu::TextureViewDescriptor::default());
+    let bind_group = device.create_bind_group(&wgpu::BindGroupDescriptor {
+        label: Some("riterm background bind group"),
+        layout,
+        entries: &[
+            wgpu::BindGroupEntry {
+                binding: 0,
+                resource: wgpu::BindingResource::TextureView(&view),
+            },
+            wgpu::BindGroupEntry {
+                binding: 1,
+                resource: wgpu::BindingResource::Sampler(sampler),
+            },
+        ],
+    });
+    Ok(LoadedBackgroundImage {
+        width,
+        height,
+        bind_group,
+        _texture: texture,
+    })
+}
+
+fn create_background_bind_layout(device: &wgpu::Device) -> wgpu::BindGroupLayout {
+    device.create_bind_group_layout(&wgpu::BindGroupLayoutDescriptor {
+        label: Some("riterm background bind layout"),
+        entries: &[
+            wgpu::BindGroupLayoutEntry {
+                binding: 0,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Texture {
+                    sample_type: wgpu::TextureSampleType::Float { filterable: true },
+                    view_dimension: wgpu::TextureViewDimension::D2,
+                    multisampled: false,
+                },
+                count: None,
+            },
+            wgpu::BindGroupLayoutEntry {
+                binding: 1,
+                visibility: wgpu::ShaderStages::FRAGMENT,
+                ty: wgpu::BindingType::Sampler(wgpu::SamplerBindingType::Filtering),
+                count: None,
+            },
+        ],
+    })
+}
+
+fn create_background_pipeline(
+    device: &wgpu::Device,
+    format: wgpu::TextureFormat,
+    bind_layout: &wgpu::BindGroupLayout,
+) -> wgpu::RenderPipeline {
+    let shader = device.create_shader_module(wgpu::ShaderModuleDescriptor {
+        label: Some("riterm background shader"),
+        source: wgpu::ShaderSource::Wgsl(include_str!("background.wgsl").into()),
+    });
+    let pipeline_layout = device.create_pipeline_layout(&wgpu::PipelineLayoutDescriptor {
+        label: Some("riterm background pipeline layout"),
+        bind_group_layouts: &[Some(bind_layout)],
+        immediate_size: 0,
+    });
+    device.create_render_pipeline(&wgpu::RenderPipelineDescriptor {
+        label: Some("riterm background pipeline"),
+        layout: Some(&pipeline_layout),
+        vertex: wgpu::VertexState {
+            module: &shader,
+            entry_point: Some("vs_main"),
+            compilation_options: Default::default(),
+            buffers: &[Some(wgpu::VertexBufferLayout {
+                array_stride: std::mem::size_of::<BackgroundVertex>() as u64,
+                step_mode: wgpu::VertexStepMode::Vertex,
+                attributes: &[
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 0,
+                        shader_location: 0,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 8,
+                        shader_location: 1,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 16,
+                        shader_location: 2,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 32,
+                        shader_location: 3,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x2,
+                        offset: 40,
+                        shader_location: 4,
+                    },
+                    wgpu::VertexAttribute {
+                        format: wgpu::VertexFormat::Float32x4,
+                        offset: 48,
+                        shader_location: 5,
+                    },
+                ],
+            })],
+        },
+        primitive: wgpu::PrimitiveState::default(),
+        depth_stencil: None,
+        multisample: wgpu::MultisampleState::default(),
+        fragment: Some(wgpu::FragmentState {
+            module: &shader,
+            entry_point: Some("fs_main"),
+            compilation_options: Default::default(),
+            targets: &[Some(wgpu::ColorTargetState {
+                format,
+                blend: Some(wgpu::BlendState::ALPHA_BLENDING),
+                write_mask: wgpu::ColorWrites::ALL,
+            })],
+        }),
+        multiview_mask: None,
+        cache: None,
+    })
+}
+
 fn create_quad_pipeline(
     device: &wgpu::Device,
     format: wgpu::TextureFormat,
@@ -1982,6 +2482,89 @@ fn create_quad_pipeline(
         multiview_mask: None,
         cache: None,
     })
+}
+
+#[cfg(test)]
+mod path_tests {
+    use super::expand_path;
+
+    #[test]
+    fn expands_home_prefix() {
+        let home = std::env::var("HOME").expect("HOME is set");
+        assert_eq!(expand_path("~"), std::path::PathBuf::from(&home));
+        assert_eq!(
+            expand_path("~/Pictures/bg.png"),
+            std::path::PathBuf::from(home).join("Pictures/bg.png")
+        );
+        assert_eq!(
+            expand_path("/tmp/bg.png"),
+            std::path::PathBuf::from("/tmp/bg.png")
+        );
+    }
+}
+
+#[cfg(test)]
+mod background_image_tests {
+    use super::decode_png_rgba;
+    use std::io::Write as _;
+    use std::path::PathBuf;
+
+    fn write_png(
+        name: &str,
+        color: png::ColorType,
+        data: &[u8],
+        width: u32,
+        height: u32,
+    ) -> PathBuf {
+        let path = std::env::temp_dir().join(format!("riterm-{}-{name}.png", std::process::id()));
+        let file = std::fs::File::create(&path).expect("create test png");
+        let mut writer = std::io::BufWriter::new(file);
+        let mut encoder = png::Encoder::new(&mut writer, width, height);
+        encoder.set_color(color);
+        encoder.set_depth(png::BitDepth::Eight);
+        let mut png = encoder.write_header().expect("png header");
+        png.write_image_data(data).expect("png data");
+        png.finish().expect("png finish");
+        writer.flush().expect("flush");
+        path
+    }
+
+    #[test]
+    fn decodes_rgba_png() {
+        let path = write_png(
+            "rgba",
+            png::ColorType::Rgba,
+            &[255, 0, 0, 255, 0, 255, 0, 128],
+            2,
+            1,
+        );
+        let (width, height, rgba) = decode_png_rgba(&path).expect("decode");
+        assert_eq!((width, height), (2, 1));
+        assert_eq!(rgba, vec![255, 0, 0, 255, 0, 255, 0, 128]);
+        let _ = std::fs::remove_file(path);
+    }
+
+    #[test]
+    fn expands_rgb_and_grayscale_pngs_to_rgba() {
+        let rgb = write_png("rgb", png::ColorType::Rgb, &[10, 20, 30], 1, 1);
+        assert_eq!(
+            decode_png_rgba(&rgb).expect("decode rgb").2,
+            vec![10, 20, 30, 255]
+        );
+        let _ = std::fs::remove_file(rgb);
+
+        let gray = write_png("gray", png::ColorType::Grayscale, &[77, 88], 2, 1);
+        assert_eq!(
+            decode_png_rgba(&gray).expect("decode grayscale").2,
+            vec![77, 77, 77, 255, 88, 88, 88, 255]
+        );
+        let _ = std::fs::remove_file(gray);
+    }
+
+    #[test]
+    fn rejects_missing_files() {
+        assert!(decode_png_rgba(std::path::Path::new("/nonexistent/riterm-bg.png")).is_err());
+    }
 }
 
 #[cfg(test)]

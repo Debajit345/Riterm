@@ -41,7 +41,8 @@ Target: replace a normal terminal for everyday work.
 - [x] Scrollbar / scroll position indicator
 - [x] Cursor blinking (`cursor_blink`, iTerm2's 0.5 s phase)
 - [ ] Per-profile key mappings and modifier remapping
-- [ ] Window transparency, background image, blur (where compositor allows)
+- [x] Window transparency and background images (stretch/tile/fill/fit, blend)
+- [ ] Background blur (where the compositor allows it)
 - [ ] Multiple windows and session restore
 - [ ] Tab drag-reorder, tab colors, rename, close buttons
 - [ ] Hotkey window (drop-down) via compositor keybind + layer surface

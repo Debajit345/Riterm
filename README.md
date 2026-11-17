@@ -50,6 +50,10 @@ and configuration formats.
 - **Notifications and triggers**: desktop notifications for long or failed
   commands while unfocused, for the bell, and for configured regex triggers.
   Trigger matches can also mark the tab with the attention dot.
+- **Background images and transparency**: per-profile PNG backgrounds with
+  iTerm2's stretch, tile, scale-to-fill, and scale-to-fit modes, a background
+  color/image blend, and window opacity. The image is composited beneath cell
+  backgrounds and text.
 - **Terminal core** from `alacritty_terminal`: full VT/ANSI parsing, scrollback,
   alternate screen, bracketed paste, mouse reporting, OSC clipboard and title
   handling.
@@ -174,6 +178,10 @@ use_bright_bold = true
 # link = "#328eee"
 cursor_shape = "block"       # block | beam | underline | hollow
 cursor_blink = false
+background_opacity = 1.0     # 0.0 = transparent, 1.0 = opaque
+# background_image = "~/Pictures/terminal.png"
+# background_image_mode = "stretch"  # stretch | tile | scale_fill | scale_fit
+# background_image_blend = 0.5        # 0.0 = color only, 1.0 = image only
 minimum_contrast = 0.0
 
 [profiles.Work]
@@ -194,14 +202,31 @@ background = "#0f141a"
 `[profiles.NAME]` overrides only the fields it sets. `[profile]` is the base
 for every profile. `theme_variant = "auto"` follows `RITERM_THEME_VARIANT`,
 then `COLORFGBG`, then dark. Config changes are picked up automatically while
-Riterm is running; fonts, colors, padding, keybindings, triggers, and
-notification settings update without a restart.
+Riterm is running; fonts, colors, padding, keybindings, triggers,
+notifications, background images, and opacity update without a restart.
 
 ### Built-in iTerm2 presets
 
 `Regular`, `High Contrast`, `Solarized`, `Light Background`, `Dark Background`,
 `Solarized Light`, `Solarized Dark`, `Pastel (Dark Background)`, `Tango Light`,
 `Tango Dark`, and `Smoooooth`.
+
+### Background images and transparency
+
+![Riterm with a blended background image](docs/background.png)
+
+Background images are PNG files decoded on the GPU. `background_image_mode`
+mirrors iTerm2: `stretch` distorts to fill, `tile` repeats at the image's
+natural pixel size, `scale_fill` covers the pane and crops, and `scale_fit`
+shows the whole image with the profile background in the letterbox. The image
+is blended with `background` by `background_image_blend` (iTerm2's default is
+0.5) and drawn under cell backgrounds and text.
+
+`background_opacity` is the window opacity (`0.0` fully transparent, `1.0`
+opaque). It is applied once to the composited background layer, so the
+background color and image fade together. Wayland compositors decide whether
+and how to blur or dim the desktop behind the window; Riterm does not request
+blur. Offscreen render checks stay opaque.
 
 ### Notifications and triggers
 

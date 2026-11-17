@@ -205,6 +205,8 @@ fn merge_profile(target: &mut Profile, source: &Profile) {
         scrollback,
         background_opacity,
         background_image,
+        background_image_mode,
+        background_image_blend,
         minimum_contrast,
         shell,
         working_directory,

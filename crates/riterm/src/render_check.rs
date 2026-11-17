@@ -107,7 +107,13 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
         );
     }
 
-    let pixels = renderer.render_offscreen(profile.background)?;
+    let (clear_opacity, preserve_alpha) = if std::env::var_os("RITERM_RENDER_OPACITY").is_some() {
+        (profile.background_opacity, true)
+    } else {
+        (1.0, false)
+    };
+    renderer.set_preserve_alpha(preserve_alpha);
+    let pixels = renderer.render_offscreen(profile.background, clear_opacity)?;
     write_png(path, width, height, &pixels)?;
     println!("wrote {} ({}x{}, offscreen)", path.display(), width, height);
     Ok(())
@@ -133,6 +139,10 @@ fn preset_profile(base: &ResolvedProfile, name: &str) -> ResolvedProfile {
     let mut profile = base.clone();
     profile.name = name.into();
     colors.apply_to(&mut profile, ThemeVariant::Dark);
+    // Keep the split visually distinct when the tested profile has a
+    // background image.
+    profile.background_image = None;
+    profile.background_opacity = 1.0;
     profile
 }
 

@@ -77,7 +77,10 @@ It is a roadmap document, not a claim of parity. Status values:
 | Dynamic profiles | Yes | ⏳ |
 | Automatic profile switching | Yes | ⏳ |
 | Working directory policy | Yes | 🟡 fixed startup directory; OSC 7 parsed by scripts |
-| Background image / transparency / blur | Yes | ⏳ |
+| Background image modes (stretch/tile/fill/fit) | Yes | ✅ PNG only |
+| Background image blend | Yes | ✅ `background_image_blend` |
+| Window transparency | Yes | ✅ `background_opacity`, compositor-dependent |
+| Background blur | Yes | ⏳ (compositor feature, not requested) |
 | Minimum contrast | Yes | ✅ |
 | Color preset UI | Yes | 🟡 CLI selection/import; no settings window |
 
@@ -118,7 +121,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | HiDPI scaling | Yes | ✅ per-monitor scale factor |
 | Native fullscreen | Yes | 🟡 compositor-native default |
 | Hotkey window (drop-down) | Yes | ⏳ |
-| Window transparency | Yes | ⏳ |
+| Window transparency | Yes | ✅ `background_opacity`, compositor-dependent |
 | Tabs in separate windows | Yes | ⏳ |
 | Notifications | Yes | 🟡 desktop notifications for command finish, BEL, and triggers via `notify-send` |
 | Session restoration | Yes | ⏳ |
