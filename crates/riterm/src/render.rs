@@ -24,6 +24,7 @@ use winit::event_loop::ActiveEventLoop;
 use winit::window::Window;
 
 use crate::layout::Rect;
+use crate::statusbar::{Segment as StatusSegment, SegmentWidth, Tone};
 
 #[repr(C)]
 #[derive(Clone, Copy, Debug, Pod, Zeroable)]
@@ -134,6 +135,7 @@ enum AreaKind {
     Session { id: u64, segment: usize },
     TabBar,
     Overlay,
+    StatusBar,
 }
 
 #[derive(Clone, Debug)]
@@ -143,6 +145,13 @@ struct AreaSpec {
     top: f32,
     bounds: TextBounds,
     default_color: Color,
+}
+
+/// A laid-out piece of the status bar before it becomes rich text.
+enum StatusAtom {
+    Text { text: String, tone: Tone },
+    Flex,
+    Gap(f32),
 }
 
 /// One shaped piece of a terminal row. ASCII stays in runs; non-ASCII glyphs
@@ -210,6 +219,7 @@ pub struct Renderer {
     session_buffers: HashMap<u64, SessionBuffer>,
     tab_buffer: Option<Buffer>,
     overlay_buffer: Option<Buffer>,
+    status_buffer: Option<Buffer>,
     metrics_cache: HashMap<FontKey, FontMetrics>,
     families_cache: HashMap<u64, ResolvedFamilies>,
     cursor_visible: bool,
@@ -376,6 +386,7 @@ impl Renderer {
             session_buffers: HashMap::new(),
             tab_buffer: None,
             overlay_buffer: None,
+            status_buffer: None,
             metrics_cache: HashMap::new(),
             families_cache: HashMap::new(),
             cursor_visible: true,
@@ -1033,6 +1044,177 @@ impl Renderer {
         });
     }
 
+    /// Draw the iTerm2-style status bar. `on_top` decides which edge gets the
+    /// separator line facing the terminal content.
+    pub fn prepare_status_bar(
+        &mut self,
+        segments: &[StatusSegment],
+        profile: &ResolvedProfile,
+        rect: Rect,
+        on_top: bool,
+    ) {
+        if rect.w < 8.0 || rect.h < 8.0 {
+            return;
+        }
+        let bar_bg = profile.background.mix(profile.foreground, 0.08);
+        let border = profile.background.mix(profile.foreground, 0.22);
+        self.push_quad(rect, bar_bg, profile.background_opacity.clamp(0.0, 1.0));
+        let border_rect = if on_top {
+            Rect::new(rect.x, rect.bottom() - 1.0, rect.w, 1.0)
+        } else {
+            Rect::new(rect.x, rect.y, rect.w, 1.0)
+        };
+        self.push_quad(border_rect, border, 1.0);
+
+        let metrics = self.metrics_for(profile, self.scale);
+        let scale = self.scale as f32;
+        let font_px = (metrics.font_px * 0.82).max(9.0);
+        let status_metrics = Metrics::new(font_px, (font_px * 1.25).max(font_px));
+        let padding = 10.0 * scale;
+        let available = (rect.w - padding * 2.0).max(1.0);
+        let char_w = (metrics.cell_w * 0.82).max(1.0);
+        let max_chars = ((available / char_w).floor() as usize).max(1);
+
+        // Join text components with a dim gap, and let flex spacers absorb any
+        // leftover columns. Gaps between text and a flex spacer are supplied by
+        // the spacer itself, like iTerm2's spring component.
+        let mut atoms: Vec<StatusAtom> = Vec::new();
+        for segment in segments {
+            match segment.width {
+                SegmentWidth::Auto => {
+                    let text = segment.text.trim_end();
+                    if text.is_empty() {
+                        continue;
+                    }
+                    if matches!(atoms.last(), Some(StatusAtom::Text { .. })) {
+                        atoms.push(StatusAtom::Text {
+                            text: "  ".to_string(),
+                            tone: Tone::Dim,
+                        });
+                    }
+                    atoms.push(StatusAtom::Text {
+                        text: text.to_string(),
+                        tone: segment.tone,
+                    });
+                }
+                SegmentWidth::Flex => {
+                    if !matches!(atoms.last(), Some(StatusAtom::Flex)) {
+                        atoms.push(StatusAtom::Flex);
+                    }
+                }
+                SegmentWidth::Fixed(points) => {
+                    atoms.push(StatusAtom::Gap(points as f32 * scale));
+                }
+            }
+        }
+        if atoms.is_empty() {
+            return;
+        }
+
+        let gap_chars: usize = atoms
+            .iter()
+            .map(|atom| match atom {
+                StatusAtom::Gap(points) => ((points / char_w).round() as usize).max(1),
+                _ => 0,
+            })
+            .sum();
+        let budget = max_chars.saturating_sub(gap_chars);
+        // Shrink the longest text segment until the row fits. Keeping every
+        // component visible is more useful than dropping the clock off-screen.
+        loop {
+            let total: usize = atoms
+                .iter()
+                .map(|atom| match atom {
+                    StatusAtom::Text { text, .. } => text.chars().count(),
+                    _ => 0,
+                })
+                .sum();
+            if total <= budget {
+                break;
+            }
+            let longest = atoms
+                .iter()
+                .enumerate()
+                .filter_map(|(index, atom)| match atom {
+                    StatusAtom::Text { text, .. } => {
+                        let chars = text.chars().count();
+                        (chars > 3).then_some((index, chars))
+                    }
+                    _ => None,
+                })
+                .max_by_key(|(_, chars)| *chars)
+                .map(|(index, _)| index);
+            let Some(index) = longest else {
+                break;
+            };
+            if let StatusAtom::Text { text, .. } = &mut atoms[index] {
+                let chars = text.chars().count();
+                *text = crate::statusbar::truncate_middle(text, chars - 1);
+            }
+        }
+
+        let flex_count = atoms
+            .iter()
+            .filter(|atom| matches!(atom, StatusAtom::Flex))
+            .count();
+        let fixed_chars: usize = atoms
+            .iter()
+            .map(|atom| match atom {
+                StatusAtom::Text { text, .. } => text.chars().count(),
+                StatusAtom::Gap(points) => ((points / char_w).round() as usize).max(1),
+                StatusAtom::Flex => 0,
+            })
+            .sum();
+        let flex_chars = if flex_count == 0 {
+            0
+        } else {
+            max_chars.saturating_sub(fixed_chars) / flex_count
+        };
+
+        let families = self.families_for(profile);
+        let family_name = families.primary.clone();
+        let family = family_of(family_name.as_deref());
+        let features = parse_font_features(profile);
+        let mut spans: Vec<(String, Attrs)> = Vec::new();
+        for atom in atoms {
+            let (text, tone) = match atom {
+                StatusAtom::Text { text, tone } => (text, tone),
+                StatusAtom::Flex => (" ".repeat(flex_chars), Tone::Dim),
+                StatusAtom::Gap(points) => (
+                    " ".repeat(((points / char_w).round() as usize).max(1)),
+                    Tone::Dim,
+                ),
+            };
+            let attrs = Attrs::new()
+                .family(family)
+                .color(status_tone_color(tone, profile))
+                .font_features(features.clone());
+            spans.push((text, attrs));
+        }
+        let default_attrs = Attrs::new()
+            .family(family)
+            .color(color(profile.foreground))
+            .font_features(features);
+        let refs: Vec<(&str, Attrs)> = spans
+            .iter()
+            .map(|(text, attrs)| (text.as_str(), attrs.clone()))
+            .collect();
+        let mut buffer = Buffer::new(&mut self.font_system, status_metrics);
+        buffer.set_size(Some(available), Some(rect.h.max(1.0)));
+        buffer.set_rich_text(refs, &default_attrs, Shaping::Basic, None);
+        buffer.shape_until_scroll(&mut self.font_system, false);
+        self.status_buffer = Some(buffer);
+
+        let text_top = rect.y + (rect.h - status_metrics.line_height) / 2.0;
+        self.text_specs.push(AreaSpec {
+            kind: AreaKind::StatusBar,
+            left: rect.x + padding,
+            top: text_top.max(rect.y),
+            bounds: text_bounds(rect),
+            default_color: color(profile.foreground),
+        });
+    }
+
     pub fn prepare_tab_bar(&mut self, tabs: &[TabInfo], profile: &ResolvedProfile, rect: Rect) {
         if tabs.is_empty() {
             return;
@@ -1417,6 +1599,7 @@ impl Renderer {
             let buffers = &self.session_buffers;
             let tab_buffer = self.tab_buffer.as_ref();
             let overlay_buffer = self.overlay_buffer.as_ref();
+            let status_buffer = self.status_buffer.as_ref();
             let areas = self.text_specs.iter().filter_map(|spec| {
                 let buffer = match spec.kind {
                     AreaKind::Session { id, segment } => buffers
@@ -1425,6 +1608,7 @@ impl Renderer {
                         .map(|segment| &segment.buffer),
                     AreaKind::TabBar => tab_buffer,
                     AreaKind::Overlay => overlay_buffer,
+                    AreaKind::StatusBar => status_buffer,
                 }?;
                 Some(TextArea {
                     buffer,
@@ -1585,6 +1769,20 @@ fn parse_font_features(profile: &ResolvedProfile) -> FontFeatures {
 
 fn color(rgb: Rgb) -> Color {
     Color::rgb(rgb.r, rgb.g, rgb.b)
+}
+
+fn status_tone_color(tone: Tone, profile: &ResolvedProfile) -> Color {
+    let bar_bg = profile.background.mix(profile.foreground, 0.08);
+    match tone {
+        Tone::Normal => color(profile.foreground),
+        Tone::Dim => color(profile.foreground.mix(profile.background, 0.42)),
+        Tone::Accent => color(profile.link),
+        // Semantic colors are fixed so they read as green/red/yellow across
+        // themes, then nudged for contrast against the bar background.
+        Tone::Success => color(ensure_contrast(Rgb::new(120, 210, 140), bar_bg, 0.22)),
+        Tone::Failure => color(ensure_contrast(Rgb::new(255, 110, 110), bar_bg, 0.22)),
+        Tone::Running => color(ensure_contrast(Rgb::new(230, 195, 90), bar_bg, 0.22)),
+    }
 }
 
 fn sanitize_title(title: &str) -> String {

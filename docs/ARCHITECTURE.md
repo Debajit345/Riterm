@@ -6,7 +6,7 @@ Riterm is a Cargo workspace with three crates:
 riterm/
 ├── crates/
 │   ├── riterm-config/   TOML config, profiles, iTerm2 importers, presets
-│   ├── riterm-core/     PTY sessions, VT state, OSC 133 scanner
+│   ├── riterm-core/     PTY sessions, VT state, OSC 133/OSC 7 scanner
 │   └── riterm/          winit app, wgpu renderer, search/copy, triggers, CLI
 ├── shell-integration/   bash/zsh/fish integration scripts
 ├── third_party/iterm2/  copied iTerm2 plists and provenance
@@ -24,7 +24,8 @@ riterm/
 - `colors.rs` — `Rgb` parsing/serialization and color mixing.
 - `iterm.rs` — importers for `.itermcolors` presets and iTerm2 preference
   plists (`New Bookmarks`), including iTerm2 font-name parsing, light/dark
-  color variants, cursor shape, scrollback, and working directories.
+  color variants, cursor shape, scrollback, working directories, and the
+  `Show Status Bar` / status bar layout mapping.
 - `presets.rs` — all 11 built-in iTerm2 presets, generated from iTerm2's
   `ColorPresets.plist` by `tools/generate_presets.py`.
 
@@ -49,25 +50,26 @@ new sessions, while appearance changes apply immediately.
   `alacritty_terminal`, a `vte::ansi::Processor`, and a background I/O thread.
   The thread reads PTY bytes and writes queued input; events are delivered to
   the UI through a `SessionSink` closure.
-- `shell_integration.rs` — incremental OSC 133 scanner. It is independent of
-  the VT parser and returns the end offset of each complete mark, so `feed()`
-  can advance the emulator in stream order and record the mark at the correct
-  cursor position.
+- `shell_integration.rs` — incremental OSC 133/OSC 7 scanner. It is independent
+  of the VT parser and returns the end offset of each complete sequence, so
+  `feed()` can advance the emulator in stream order and record the mark or
+  working directory at the correct point in the stream.
 - `size.rs` — the `Dimensions` implementation used by `Term::new` and
   `Term::resize`.
 
-`Session::feed` scans bytes for marks, feeds everything up to and including each
-mark to the VT parser, records the mark at the resulting cursor position, then
-feeds the remaining bytes. This keeps marks anchored to the prompt even when
-escape sequences are split across PTY reads.
+`Session::feed` scans bytes for marks and directory reports, feeds everything up
+to and including each sequence to the VT parser, records the mark at the
+resulting cursor position (or updates the session's `cwd`/remote user/host),
+then feeds the remaining bytes. This keeps marks anchored to the prompt even
+when escape sequences are split across PTY reads.
 
 ### `riterm`
 
 - `main.rs` — clap CLI, tracing setup, event loop creation, theme selection,
   import and shell-integration subcommands.
-- `app.rs` — `ApplicationHandler<UserEvent>`: tabs, split trees, focus, mouse
-  selection/reporting, clipboard, session events, cursor blink scheduling, and
-  drawing.
+- `app.rs` — `ApplicationHandler<UserEvent>`: tabs, split trees, layout
+  reservation for the tab and status bars, focus, mouse selection/reporting,
+  clipboard, session events, cursor blink scheduling, and drawing.
 - `layout.rs` — `PaneNode` split tree, rectangle layout, split/remove, tests.
 - `input.rs` — default keybindings, chord canonicalization, action lookup, key
   encoding for the PTY (application cursor keys, CSI modifiers, function keys),
@@ -77,13 +79,17 @@ escape sequences are split across PTY reads.
   reads, compiles enabled regexes, and skips invalid expressions with a warning.
 - `notifications.rs` — sends notifications through `notify-send` on a detached
   thread, so a slow notification daemon cannot block the event loop.
+- `statusbar.rs` — turns a profile's component list and the active session into
+  styled segments. Clock, host, user, load, memory, and battery are sampled at
+  most once a second; git branches are cached per directory. It also contains
+  path shortening (`~`, middle ellipsis) and the Linux `/proc`/`/sys` parsers.
 - `search.rs` — case-insensitive scrollback search. It folds each grid cell
   to lowercase, maps matches back to absolute grid points (including negative
   history lines), and provides vi-style word motions for copy mode.
 - `render.rs` — wgpu device/surface, quad pipeline, glyphon text atlas, font
   family resolution and metrics caches, segment shaping, cell
-  background/selection/search-highlight/cursor rendering, tab bar, and the
-  search/copy overlay line.
+  background/selection/search-highlight/cursor rendering, tab bar, status bar,
+  and the search/copy overlay line.
 - `quads.wgsl` — minimal instanced-free quad shader.
 - `shell_install.rs` — installs scripts and hooks rc files.
 
@@ -114,9 +120,10 @@ keyboard ──► App::handle_key ──► Action or encode_key ──► Sess
 
 `Session::feed` also updates `command_state` (`Idle`, `Running`,
 `Finished(code)`) and `last_exit_code` from OSC 133, plus a globally monotonic
-`command_finished_epoch`. The app acknowledges the newest epoch per tab, so a
-failure is still reported when bash emits `D;1` and the next `A` in the same
-read (the `A` resets the live state to `Idle`).
+`command_finished_epoch`; OSC 7 updates `cwd`, `remote_user`, and `remote_host`.
+The app acknowledges the newest epoch per tab, so a failure is still reported
+when bash emits `D;1` and the next `A` in the same read (the `A` resets the live
+state to `Idle`).
 
 Each mark stores its absolute point together with the history size at capture
 time. A point's offset from the top of the buffer is stable as scrollback grows,
@@ -157,6 +164,29 @@ transparency is requested from winit only when some profile has
 Offscreen render checks force opacity to 1 except when
 `RITERM_RENDER_OPACITY` is set for pipeline verification.
 
+## Status bar
+
+`window_areas` splits the surface into the tab bar, an optional status bar, and
+terminal content. Reserving the rectangle before pane layout keeps the PTY rows
+and mouse hit-testing based on the same geometry. The bar is drawn like other
+chrome: a background quad with the profile background mixed 8% toward the
+foreground, a one-pixel separator on the edge facing the terminal, and one
+rich-text glyphon buffer.
+
+`statusbar::segments` resolves each component against the active session and
+cached system values. Text components are joined with dim gaps; `spacer`
+absorbs leftover columns, and `spacer:N` becomes a fixed character gap. When
+the row is too wide, the longest text segment is shortened in the middle until
+it fits, so no component disappears off the edge. Semantic tones (success,
+failure, running) use fixed hues nudged for contrast against the bar
+background.
+
+Clock, load, memory, and battery values are refreshed at most once a second and
+the event loop schedules a redraw when the status bar is visible. Git branch
+lookups walk up to the repository and are cached per working directory for two
+seconds. `Ctrl+Shift+S` stores a per-tab override without modifying the
+profile, and a config reload re-resolves the profile for every pane.
+
 ## Rendering
 
 Each frame:
@@ -169,8 +199,8 @@ Each frame:
 3. If a profile has a background image, `ensure_background_image` decodes the
    PNG once (cached by path and modification time), uploads an `Rgba8Unorm`
    texture, and `prepare_session` records a background quad.
-4. Cell backgrounds, selection, cursor shapes, dividers, and the tab bar are
-   pushed as colored quads.
+4. Cell backgrounds, selection, cursor shapes, dividers, the tab bar, and the
+   status bar are pushed as colored quads.
 5. The background pipeline draws image quads first and blends them with the
    profile background in the shader. The quad pipeline then draws cell
    backgrounds and chrome, and glyphon prepares text areas and renders them in
@@ -265,8 +295,9 @@ simplicity; replacing it with `polling`/`epoll` is a planned optimization.
 - The terminal type is `xterm-256color`; `COLORTERM=truecolor`.
 - `TERM_PROGRAM=iTerm2` and `LC_TERMINAL=iTerm2` are exported so tools that
   detect iTerm2 enable their integrations. `RITERM=1` identifies Riterm itself.
-- OSC 133 is the only shell-integration protocol interpreted by the core.
-  OSC 1337 features (badges, user vars, inline images) are not implemented yet.
+- OSC 133 and OSC 7 drive shell integration; the legacy
+  `OSC 1337;CurrentDir` form is accepted for directory tracking. Other OSC 1337
+  features (badges, user vars, inline images) are not implemented yet.
 - iTerm2 plists are read, never modified. Import writes native TOML.
 
 ## Testing
@@ -276,7 +307,9 @@ simplicity; replacing it with `polling`/`epoll` is a planned optimization.
   it into the terminal, and asserts the grid content.
 - `riterm-config`: color parsing, preset variants, theme resolution, profile
   merging, and font-name parsing.
-- `riterm` (binary crate): split tree layout, key encoding, Unicode shaping,
-  and command-failure bookkeeping.
+- `riterm` (binary crate): split tree layout and window-area reservation, key
+  encoding, Unicode shaping, status bar paths/git/system parsing, and
+  command-failure bookkeeping.
 - `--render-check` writes a deterministic offscreen PNG that exercises presets,
-  styles, fallback glyphs, wide characters, RTL, emoji, and the tab bar.
+  styles, fallback glyphs, wide characters, RTL, emoji, and the tab and status
+  bars.

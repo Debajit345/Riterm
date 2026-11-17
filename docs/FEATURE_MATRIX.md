@@ -66,7 +66,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Bold/italic font toggles | Yes | ✅ |
 | OpenType feature list | Yes | 🟡 parsed and passed to shaping |
 | ANSI palette, fg/bg/bold/cursor/selection/link | Yes | ✅ |
-| Cursor text / selected text / cursor guide / badge colors | Yes | 🟡 parsed and applied except cursor guide/badge rendering |
+| Cursor text / selected text / cursor guide / badge colors | Yes | 🟡 cursor, selected text, and guide colors applied; badge rendering planned |
 | Built-in iTerm2 color presets | 11 | ✅ all 11, dark/light variants, `--list-themes` |
 | Dark/light/auto appearance | Yes | ✅ `theme_variant` with `RITERM_THEME_VARIANT`/`COLORFGBG` |
 | `.itermcolors` import | Yes | ✅ `--import-theme` |
@@ -76,7 +76,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Per-profile key mappings | Yes | 🟡 global `[keybindings]` only |
 | Dynamic profiles | Yes | ⏳ |
 | Automatic profile switching | Yes | ⏳ |
-| Working directory policy | Yes | 🟡 fixed startup directory; OSC 7 parsed by scripts |
+| Working directory policy | Yes | 🟡 configurable startup directory; OSC 7 and `1337;CurrentDir` update live session state |
 | Background image modes (stretch/tile/fill/fit) | Yes | ✅ PNG only |
 | Background image blend | Yes | ✅ `background_image_blend` |
 | Window transparency | Yes | ✅ `background_opacity`, compositor-dependent |
@@ -92,7 +92,7 @@ It is a roadmap document, not a claim of parity. Status values:
 | Command exit status | Yes | ✅ |
 | Prompt marks stored per session | Yes | ✅ re-anchored as scrollback grows, bounded at 10k |
 | Tab running / failure indicator | Yes | ✅ |
-| Current directory (OSC 7) | Yes | 🟡 scripts emit it; URL is not yet parsed into session state |
+| Current directory (OSC 7) | Yes | ✅ percent-encoded `file://user@host/path`, query strings dropped, Latin-1 fallback, plus legacy `1337;CurrentDir` |
 | bash/zsh/fish installer | Yes | ✅ `--install-shell-integration` |
 | Marks navigation and selection | Yes | ✅ jump previous/next prompt; select latest output |
 | Per-command "copy output" | Yes | ✅ latest command output; per-mark history UI planned |
@@ -137,7 +137,8 @@ It is a roadmap document, not a claim of parity. Status values:
 | AppleScript | Yes | ➖ |
 | Trigger actions (regex → action) | Yes | 🟡 global regex triggers → notify or tab bell; highlight/annotate/run planned |
 | Annotations / notes | Yes | ⏳ |
-| Status bar components | Yes | ⏳ |
+| Status bar components | Yes | ✅ cwd, git, command status, clock, host, user, load, memory, battery, session, spacers, custom text |
+| Status bar layout | Yes | ✅ per-profile components, top/bottom position, height, runtime toggle |
 | Badges | Yes | ⏳ |
 | AI chat / Composer | Yes | ⏳ deferred |
 | Browser panes | Yes | ⏳ deferred |
@@ -148,7 +149,7 @@ It is a roadmap document, not a claim of parity. Status values:
 The current build covers the daily-driver foundation and a meaningful slice of
 iTerm2's appearance system: exact default colors, all built-in presets, font
 fallback, bold/selection/cursor colors, minimum contrast, blinking cursors,
-search, copy mode, prompt marks, and notifications. The largest remaining gaps
-are highlight/run trigger actions, tmux control mode, inline images, the status
-bar, hotkey windows, background effects, and scripting. See
-[ROADMAP.md](ROADMAP.md) for sequencing.
+search, copy mode, prompt marks, a component-based status bar, and
+notifications. The largest remaining gaps are highlight/run trigger actions,
+tmux control mode, inline images, hotkey windows, background effects, badges,
+and scripting. See [ROADMAP.md](ROADMAP.md) for sequencing.

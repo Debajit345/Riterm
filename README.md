@@ -5,16 +5,17 @@
 It brings the parts of iTerm2 that matter day-to-day to Wayland and X11:
 GPU-accelerated rendering, tabs and recursive splits, named profiles, iTerm2's
 built-in color presets and profile import, font fallback, scrollback search,
-vi-style copy mode, and iTerm2-compatible OSC 133 shell integration. It is not
-a macOS app port; it is a native Linux terminal that speaks iTerm2's protocols
-and configuration formats.
+vi-style copy mode, an iTerm2-style status bar, and iTerm2-compatible OSC 133
+shell integration. It is not a macOS app port; it is a native Linux terminal
+that speaks iTerm2's protocols and configuration formats.
 
 ![Riterm rendering iTerm2 Smoooooth and Solarized Dark profiles](docs/screenshot.png)
 
 > **Status: early, usable, and expanding.** The terminal, tabs, splits,
 > profiles, built-in themes, font fallback, cursor blinking, imports, search,
-> copy mode, notifications, and shell integration work. tmux control mode,
-> richer trigger actions, inline images, and scripting are on the roadmap. See
+> copy mode, status bar, notifications, and shell integration work. tmux
+> control mode, richer trigger actions, inline images, and scripting are on the
+> roadmap. See
 > [docs/FEATURE_MATRIX.md](docs/FEATURE_MATRIX.md) and
 > [docs/ROADMAP.md](docs/ROADMAP.md).
 
@@ -47,6 +48,11 @@ and configuration formats.
 - **Prompt marks**: jump between OSC 133 prompt starts with the keyboard,
   select the latest command's output, or copy it straight to the clipboard.
   Prompt marks also appear as ticks beside the scrollbar.
+- **iTerm2-style status bar**: an optional per-profile bar above or below the
+  terminal with the current directory, git branch, command state and exit
+  status, host, user, load, memory, battery, clock, session title, spacers, and
+  custom text. OSC 7 from the shell keeps the directory and remote
+  user/host current, including across `ssh`.
 - **Notifications and triggers**: desktop notifications for long or failed
   commands while unfocused, for the bell, and for configured regex triggers.
   Trigger matches can also mark the tab with the attention dot.
@@ -66,10 +72,14 @@ and configuration formats.
   - Import profiles from `com.googlecode.iterm2.plist` (`--import-iterm2`).
   - OSC 133 `A`/`B`/`C`/`D` shell integration marks, command status, and
     per-tab running/failure indicators.
+  - OSC 7 and `1337;CurrentDir` working-directory reports, including the
+    `user@host` authority, percent-encoded paths, and iTerm2's Latin-1
+    fallback for non-UTF-8 paths.
   - Sets `TERM_PROGRAM=iTerm2`, `LC_TERMINAL=iTerm2`, `ITERM_SESSION_ID`, and
     `RITERM=1` for shells and tools that check for iTerm2.
 - **Shell integration installer** for bash, zsh, and fish
-  (`--install-shell-integration`), including OSC 7 working-directory reporting.
+  (`--install-shell-integration`), including percent-encoded OSC 7
+  working-directory reporting with user and host.
 - **Clipboard and mouse**: drag selection, copy/paste, optional copy-on-select,
   and mouse wheel scrolling.
 
@@ -139,6 +149,8 @@ is intentional and stable) and is created on first launch.
 default_profile = "Default"
 scrollback = 1000
 tab_bar_height = 30.0
+status_bar_position = "top"  # top | bottom
+status_bar_height = 28.0
 padding = 6.0
 copy_on_select = false
 middle_click_paste = true
@@ -183,6 +195,9 @@ background_opacity = 1.0     # 0.0 = transparent, 1.0 = opaque
 # background_image_mode = "stretch"  # stretch | tile | scale_fill | scale_fit
 # background_image_blend = 0.5        # 0.0 = color only, 1.0 = image only
 minimum_contrast = 0.0
+# iTerm2-style status bar (components are drawn left to right).
+# status_bar = true
+# status_bar_components = ["cwd", "git", "spacer", "command", "clock"]
 
 [profiles.Work]
 font_size = 14.0
@@ -203,7 +218,8 @@ background = "#0f141a"
 for every profile. `theme_variant = "auto"` follows `RITERM_THEME_VARIANT`,
 then `COLORFGBG`, then dark. Config changes are picked up automatically while
 Riterm is running; fonts, colors, padding, keybindings, triggers,
-notifications, background images, and opacity update without a restart.
+notifications, background images, opacity, and the status bar update without a
+restart.
 
 ### Built-in iTerm2 presets
 
@@ -227,6 +243,38 @@ opaque). It is applied once to the composited background layer, so the
 background color and image fade together. Wayland compositors decide whether
 and how to blur or dim the desktop behind the window; Riterm does not request
 blur. Offscreen render checks stay opaque.
+
+### Status bar
+
+![Riterm with the iTerm2-style status bar](docs/status-bar.png)
+
+Set `status_bar = true` in a profile and choose components in
+`status_bar_components`. The bar sits above the terminal by default
+(`status_bar_position = "top"`); `"bottom"` places it below the terminal. The
+tab bar always stays at the top of the window. Height is `status_bar_height` in
+logical pixels.
+
+Components:
+
+| Name | Shows |
+|---|---|
+| `cwd` | Working directory with `~` for home; long paths are shortened in the middle |
+| `git` | Branch of the working directory, or the short commit for a detached HEAD |
+| `command` | Running state, or the last exit status (`✓ 0` / `✗ N`) |
+| `clock` | Local time in iTerm2's default `M/dd h:mm` format |
+| `host`, `user` | OSC 7's remote identity after `ssh`, otherwise the local host/user |
+| `load` | 1/5/15-minute load averages from `/proc/loadavg` |
+| `memory` | Used and total memory from `/proc/meminfo` |
+| `battery` | Charge percentage from `/sys/class/power_supply`; hidden without a battery |
+| `session` | The shell-reported session title |
+| `spacer` | Flexible gap that absorbs leftover width |
+| `spacer:N` | Fixed gap of `N` logical pixels |
+| `custom:text` | Literal text |
+
+Text that does not fit is shortened in the middle, longest segment first, so
+every component stays visible. System values refresh once a second; git branch
+lookups are cached per directory. `Ctrl+Shift+S` toggles the bar for the active
+tab at runtime without changing the profile.
 
 ### Notifications and triggers
 
@@ -266,6 +314,7 @@ repeated errors from flooding the notification daemon.
 | `Ctrl+Shift+P` / `Ctrl+Shift+N` | Jump to previous / next prompt mark |
 | `Ctrl+Shift+A` | Select the latest command output |
 | `Ctrl+Shift+O` | Copy the latest command output |
+| `Ctrl+Shift+S` | Toggle the status bar for the active tab |
 | `Esc` | Close search or copy mode |
 
 Override or add bindings in `config.toml`:
@@ -310,8 +359,12 @@ OSC 133;A              prompt start
 OSC 133;B              prompt end / user input starts
 OSC 133;C              command started
 OSC 133;D;<status>     command finished
-OSC 7;file://host/path current working directory
+OSC 7;file://user@host/path   current working directory (percent-encoded)
 ```
+
+The scanner also accepts the older `OSC 1337;CurrentDir=<path>` form, drops an
+OSC 7 query string such as `?machineID=...`, falls back to Latin-1 for
+non-UTF-8 paths, and updates the status bar's directory, user, and host.
 
 ## Architecture
 

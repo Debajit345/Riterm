@@ -64,6 +64,121 @@ pub enum TriggerAction {
     Bell,
 }
 
+/// Where the per-profile status bar is placed in the window.
+///
+/// iTerm2 defaults to the top of the terminal area (below the tab bar).
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(rename_all = "lowercase")]
+pub enum StatusBarPosition {
+    #[default]
+    Top,
+    Bottom,
+}
+
+/// One item in a profile's status bar layout.
+///
+/// Names mirror iTerm2's status bar components. Unknown names are rejected
+/// when the configuration is parsed, so a typo is reported instead of silently
+/// dropping the component.
+#[derive(Clone, Debug, PartialEq, Eq, Serialize, Deserialize)]
+#[serde(try_from = "String", into = "String")]
+pub enum StatusBarComponent {
+    /// Current working directory, with `~` for the home directory.
+    Cwd,
+    /// Git branch of the working directory (hidden outside a repository).
+    Git,
+    /// Shell command state and last exit status.
+    Command,
+    /// Local date and time (iTerm2's default clock format).
+    Clock,
+    /// Host name.
+    Host,
+    /// User name.
+    User,
+    /// System load averages.
+    Load,
+    /// Used and total memory.
+    Memory,
+    /// Battery charge (hidden on machines without a battery).
+    Battery,
+    /// Session title reported by the shell.
+    Session,
+    /// Flexible spacer that absorbs the leftover width.
+    Spacer,
+    /// Fixed spacer measured in logical pixels, e.g. `spacer:12`.
+    FixedSpacer(u16),
+    /// Literal text, e.g. `custom:production`.
+    Custom(String),
+}
+
+impl StatusBarComponent {
+    /// Parse a component name from the configuration.
+    pub fn parse(value: &str) -> Result<Self, String> {
+        let trimmed = value.trim();
+        if let Some(text) = trimmed.strip_prefix("custom:") {
+            return Ok(Self::Custom(text.to_string()));
+        }
+        let normalized = trimmed.to_ascii_lowercase().replace('-', "_");
+        if let Some(rest) = normalized
+            .strip_prefix("spacer:")
+            .or_else(|| normalized.strip_prefix("fixed_spacer:"))
+        {
+            let points = rest
+                .parse::<u16>()
+                .map_err(|_| format!("status bar spacer width {rest:?} is not a number"))?;
+            return Ok(Self::FixedSpacer(points));
+        }
+        Ok(match normalized.as_str() {
+            "cwd" | "current_directory" | "working_directory" | "directory" | "path" => Self::Cwd,
+            "git" | "git_branch" | "branch" => Self::Git,
+            "command" | "job" | "command_status" => Self::Command,
+            "clock" | "time" => Self::Clock,
+            "host" | "hostname" => Self::Host,
+            "user" | "username" => Self::User,
+            "load" | "load_average" => Self::Load,
+            "memory" | "mem" => Self::Memory,
+            "battery" | "power" => Self::Battery,
+            "session" | "title" | "session_title" => Self::Session,
+            "spacer" | "spring" => Self::Spacer,
+            "fixed_spacer" => Self::FixedSpacer(8),
+            other => {
+                return Err(format!(
+                    "unknown status bar component {other:?}; expected cwd, git, command, clock, \
+                     host, user, load, memory, battery, session, spacer, spacer:N, or custom:text"
+                ));
+            }
+        })
+    }
+}
+
+impl TryFrom<String> for StatusBarComponent {
+    type Error = String;
+
+    fn try_from(value: String) -> Result<Self, Self::Error> {
+        Self::parse(&value)
+    }
+}
+
+impl From<StatusBarComponent> for String {
+    fn from(component: StatusBarComponent) -> Self {
+        match component {
+            StatusBarComponent::Cwd => "cwd".into(),
+            StatusBarComponent::Git => "git".into(),
+            StatusBarComponent::Command => "command".into(),
+            StatusBarComponent::Clock => "clock".into(),
+            StatusBarComponent::Host => "host".into(),
+            StatusBarComponent::User => "user".into(),
+            StatusBarComponent::Load => "load".into(),
+            StatusBarComponent::Memory => "memory".into(),
+            StatusBarComponent::Battery => "battery".into(),
+            StatusBarComponent::Session => "session".into(),
+            StatusBarComponent::Spacer => "spacer".into(),
+            StatusBarComponent::FixedSpacer(points) => format!("spacer:{points}"),
+            StatusBarComponent::Custom(text) => format!("custom:{text}"),
+        }
+    }
+}
+
 /// A regular expression matched against each line of terminal output.
 ///
 /// Triggers are global in this release. `text` overrides the notification body;
@@ -103,6 +218,10 @@ pub struct General {
     pub default_profile: String,
     /// Height of the tab bar in logical pixels.
     pub tab_bar_height: f32,
+    /// Where the profile status bar appears, when enabled.
+    pub status_bar_position: StatusBarPosition,
+    /// Height of the status bar in logical pixels.
+    pub status_bar_height: f32,
     /// Padding inside each terminal pane in logical pixels.
     pub padding: f32,
     /// Copy the selection to the clipboard when the mouse is released.
@@ -133,6 +252,8 @@ impl Default for General {
             scrollback: 1000,
             default_profile: "Default".to_string(),
             tab_bar_height: 30.0,
+            status_bar_position: StatusBarPosition::Top,
+            status_bar_height: 28.0,
             padding: 6.0,
             copy_on_select: false,
             middle_click_paste: true,
@@ -193,6 +314,10 @@ pub struct Profile {
     pub background_image_blend: Option<f32>,
     /// Minimum foreground/background contrast, 0.0 (off) to 1.0.
     pub minimum_contrast: Option<f32>,
+    /// Show the iTerm2-style status bar for this profile.
+    pub status_bar: Option<bool>,
+    /// Status bar components, left to right.
+    pub status_bar_components: Option<Vec<StatusBarComponent>>,
     pub shell: Option<String>,
     pub working_directory: Option<String>,
 }
@@ -293,6 +418,12 @@ impl Profile {
         if let Some(v) = self.minimum_contrast {
             target.minimum_contrast = v.clamp(0.0, 1.0);
         }
+        if let Some(v) = self.status_bar {
+            target.status_bar = v;
+        }
+        if let Some(v) = &self.status_bar_components {
+            target.status_bar_components = v.clone();
+        }
         if let Some(v) = &self.shell {
             target.shell = Some(v.clone());
         }
@@ -336,6 +467,8 @@ pub struct ResolvedProfile {
     pub background_image_mode: BackgroundImageMode,
     pub background_image_blend: f32,
     pub minimum_contrast: f32,
+    pub status_bar: bool,
+    pub status_bar_components: Vec<StatusBarComponent>,
     pub shell: Option<String>,
     pub working_directory: Option<String>,
 }
@@ -386,6 +519,14 @@ impl Default for ResolvedProfile {
             background_image_mode: BackgroundImageMode::Stretch,
             background_image_blend: 0.5,
             minimum_contrast: 0.0,
+            status_bar: false,
+            status_bar_components: vec![
+                StatusBarComponent::Cwd,
+                StatusBarComponent::Git,
+                StatusBarComponent::Spacer,
+                StatusBarComponent::Command,
+                StatusBarComponent::Clock,
+            ],
             shell: None,
             working_directory: None,
         }
@@ -542,6 +683,9 @@ const DEFAULT_CONFIG: &str = r##"# Riterm configuration
 default_profile = "Default"
 scrollback = 1000
 tab_bar_height = 30.0
+# iTerm2 places the status bar above the terminal by default.
+status_bar_position = "top"      # top | bottom
+status_bar_height = 28.0
 padding = 6.0
 copy_on_select = false
 middle_click_paste = true
@@ -579,6 +723,12 @@ line_height = 1.2
 # background_image_mode = "stretch"  # stretch | tile | scale_fill | scale_fit
 # background_image_blend = 0.5        # 0.0 = color only, 1.0 = image only
 # minimum_contrast = 0.0
+#
+# iTerm2-style status bar. Components are drawn left to right; "spacer" is a
+# flexible gap and "spacer:12" is a fixed 12px gap. Other options: cwd, git,
+# command, clock, host, user, load, memory, battery, session, custom:text.
+# status_bar = true
+# status_bar_components = ["cwd", "git", "spacer", "command", "clock"]
 
 [profiles.Work]
 font_size = 14.0
@@ -669,6 +819,116 @@ background_opacity = 0.6
                     .expect("mode parses");
             assert_eq!(config.resolve("Default").background_image_mode, expected);
         }
+    }
+
+    #[test]
+    fn status_bar_settings_parse() {
+        let config: Config = toml::from_str(
+            r#"
+[general]
+status_bar_position = "bottom"
+status_bar_height = 34.0
+
+[profile]
+status_bar = true
+status_bar_components = ["cwd", "git", "spacer", "command", "clock", "custom:prod"]
+"#,
+        )
+        .expect("status bar config parses");
+        assert_eq!(
+            config.general.status_bar_position,
+            StatusBarPosition::Bottom
+        );
+        let profile = config.resolve("Default");
+        assert!(profile.status_bar);
+        assert_eq!(
+            profile.status_bar_components,
+            vec![
+                StatusBarComponent::Cwd,
+                StatusBarComponent::Git,
+                StatusBarComponent::Spacer,
+                StatusBarComponent::Command,
+                StatusBarComponent::Clock,
+                StatusBarComponent::Custom("prod".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn status_bar_component_aliases_and_spacers() {
+        assert_eq!(
+            StatusBarComponent::parse("working_directory").unwrap(),
+            StatusBarComponent::Cwd
+        );
+        assert_eq!(
+            StatusBarComponent::parse("HOSTNAME").unwrap(),
+            StatusBarComponent::Host
+        );
+        assert_eq!(
+            StatusBarComponent::parse("fixed-spacer").unwrap(),
+            StatusBarComponent::FixedSpacer(8)
+        );
+        assert_eq!(
+            StatusBarComponent::parse("spacer:24").unwrap(),
+            StatusBarComponent::FixedSpacer(24)
+        );
+        assert_eq!(
+            StatusBarComponent::parse("custom:build server").unwrap(),
+            StatusBarComponent::Custom("build server".into())
+        );
+        assert!(StatusBarComponent::parse("nonsense").is_err());
+
+        let round_trip = StatusBarComponent::FixedSpacer(12);
+        assert_eq!(String::from(round_trip.clone()), "spacer:12");
+        assert_eq!(
+            StatusBarComponent::parse("sb_color").unwrap_err(),
+            "unknown status bar component \"sb_color\"; expected cwd, git, command, clock, host, \
+             user, load, memory, battery, session, spacer, spacer:N, or custom:text"
+        );
+    }
+
+    #[test]
+    fn status_bar_components_round_trip_through_toml() {
+        let mut config = Config::default();
+        config.profile.status_bar = Some(true);
+        config.profile.status_bar_components = Some(vec![
+            StatusBarComponent::Cwd,
+            StatusBarComponent::FixedSpacer(12),
+            StatusBarComponent::Custom("build".into()),
+        ]);
+        let text = toml::to_string_pretty(&config).expect("serialize config");
+        assert!(text.contains("\"cwd\""));
+        assert!(text.contains("\"spacer:12\""));
+        assert!(text.contains("\"custom:build\""));
+        let parsed: Config = toml::from_str(&text).expect("parse serialized config");
+        assert_eq!(
+            parsed.resolve("Default").status_bar_components,
+            vec![
+                StatusBarComponent::Cwd,
+                StatusBarComponent::FixedSpacer(12),
+                StatusBarComponent::Custom("build".into()),
+            ]
+        );
+    }
+
+    #[test]
+    fn default_status_bar_layout_is_inert() {
+        let profile = Config::default().resolve("Default");
+        assert!(!profile.status_bar);
+        assert_eq!(
+            profile.status_bar_components,
+            vec![
+                StatusBarComponent::Cwd,
+                StatusBarComponent::Git,
+                StatusBarComponent::Spacer,
+                StatusBarComponent::Command,
+                StatusBarComponent::Clock,
+            ]
+        );
+        assert_eq!(
+            Config::default().general.status_bar_position,
+            StatusBarPosition::Top
+        );
     }
 
     #[test]

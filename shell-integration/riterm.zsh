@@ -16,13 +16,34 @@ __riterm_preexec() {
     printf '\033]133;C\007'
 }
 
+# Percent-encode a path for OSC 7. `nomultibyte` plus LC_ALL=C makes the loop
+# visit individual bytes, so each UTF-8 byte is escaped separately.
+__riterm_encode_path() {
+    emulate -L zsh
+    setopt nomultibyte
+    local path="$1" out="" ch hex i
+    local LC_ALL=C
+    for ((i = 1; i <= ${#path}; ++i)); do
+        ch="${path[i]}"
+        if [[ "$ch" == [/._~A-Za-z0-9-] ]]; then
+            out+="$ch"
+        else
+            printf -v hex '%02X' "$((#ch & 0xFF))"
+            out+="%$hex"
+        fi
+    done
+    __RITERM_ENCODED_PATH="$out"
+}
+
 __riterm_precmd() {
     local status=$?
     if [[ "${__riterm_command_started:-0}" == 1 ]]; then
         printf '\033]133;D;%s\007' "$status"
         __riterm_command_started=0
     fi
-    printf '\033]7;file://%s%s\007' "${HOST:-localhost}" "$PWD"
+    __riterm_encode_path "$PWD"
+    printf '\033]7;file://%s@%s%s\007' \
+        "${USER:-user}" "${HOST:-localhost}" "$__RITERM_ENCODED_PATH"
 }
 
 add-zsh-hook preexec __riterm_preexec

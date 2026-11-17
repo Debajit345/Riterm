@@ -33,7 +33,8 @@ else
 end
 
 function fish_prompt
-    printf '\033]7;file://%s%s\007' (hostname) $PWD
+    # `string escape --style=url` percent-encodes the path for OSC 7.
+    printf '\033]7;file://%s@%s%s\007' $USER (hostname) (string escape --style=url -- $PWD)
     printf '\033]133;A\007'
     __riterm_original_prompt
     printf '\033]133;B\007'

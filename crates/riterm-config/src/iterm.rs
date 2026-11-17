@@ -7,7 +7,7 @@ use plist::Value;
 use serde::{Deserialize, Serialize};
 
 use super::colors::component_to_u8;
-use super::{Profile, ResolvedProfile, Rgb};
+use super::{Profile, ResolvedProfile, Rgb, StatusBarComponent};
 
 #[cfg(test)]
 use super::presets;
@@ -364,6 +364,8 @@ fn profile_from_dict(dict: &plist::Dictionary) -> Profile {
         cursor_blink: dict_bool(dict, "Blinking Cursor"),
         cursor_shape: dict_cursor_shape(dict),
         scrollback: dict_scrollback(dict),
+        status_bar: dict_bool(dict, "Show Status Bar"),
+        status_bar_components: dict_status_bar_components(dict),
         working_directory: dict
             .get("Working Directory")
             .and_then(Value::as_string)
@@ -372,6 +374,40 @@ fn profile_from_dict(dict: &plist::Dictionary) -> Profile {
         shell: None,
         ..Profile::default()
     }
+}
+
+/// Map an iTerm2 status bar layout's Objective-C component classes onto the
+/// components riterm implements. Unsupported components (CPU, network, ...)
+/// are skipped rather than shown with bogus data.
+fn dict_status_bar_components(dict: &plist::Dictionary) -> Option<Vec<StatusBarComponent>> {
+    let layout = dict.get("Status Bar Layout")?.as_dictionary()?;
+    let components = layout.get("components")?.as_array()?;
+    let mut mapped = Vec::new();
+    for component in components {
+        let Some(component) = component.as_dictionary() else {
+            continue;
+        };
+        let Some(class) = component.get("class").and_then(Value::as_string) else {
+            continue;
+        };
+        let mapped_component = match class {
+            "iTermStatusBarWorkingDirectoryComponent" => Some(StatusBarComponent::Cwd),
+            "iTermStatusBarGitComponent" => Some(StatusBarComponent::Git),
+            "iTermStatusBarClockComponent" => Some(StatusBarComponent::Clock),
+            "iTermStatusBarHostnameComponent" => Some(StatusBarComponent::Host),
+            "iTermStatusBarUsernameComponent" => Some(StatusBarComponent::User),
+            "iTermStatusBarJobComponent" => Some(StatusBarComponent::Command),
+            "iTermStatusBarMemoryUtilizationComponent" => Some(StatusBarComponent::Memory),
+            "iTermStatusBarBatteryComponent" => Some(StatusBarComponent::Battery),
+            "iTermStatusBarSpringComponent" => Some(StatusBarComponent::Spacer),
+            "iTermStatusBarFixedSpacerComponent" => Some(StatusBarComponent::FixedSpacer(8)),
+            _ => None,
+        };
+        if let Some(component) = mapped_component {
+            mapped.push(component);
+        }
+    }
+    (!mapped.is_empty()).then_some(mapped)
 }
 
 fn dict_bool(dict: &plist::Dictionary, key: &str) -> Option<bool> {
@@ -459,6 +495,44 @@ mod tests {
         assert_eq!(set.foreground, Rgb::parse("#839496"));
         assert_eq!(set.palette[1], Rgb::parse("#dc322f"));
         assert_eq!(set.palette[15], Rgb::parse("#fdf6e3"));
+    }
+
+    #[test]
+    fn imports_show_status_bar_and_known_components() {
+        let mut first = plist::Dictionary::new();
+        first.insert(
+            "class".into(),
+            Value::String("iTermStatusBarWorkingDirectoryComponent".into()),
+        );
+        let mut second = plist::Dictionary::new();
+        second.insert(
+            "class".into(),
+            Value::String("iTermStatusBarDailySpacetimeAnomalyComponent".into()),
+        );
+        let mut third = plist::Dictionary::new();
+        third.insert(
+            "class".into(),
+            Value::String("iTermStatusBarClockComponent".into()),
+        );
+        let mut layout = plist::Dictionary::new();
+        layout.insert(
+            "components".into(),
+            Value::Array(vec![
+                Value::Dictionary(first),
+                Value::Dictionary(second),
+                Value::Dictionary(third),
+            ]),
+        );
+        let mut profile = plist::Dictionary::new();
+        profile.insert("Show Status Bar".into(), Value::Boolean(true));
+        profile.insert("Status Bar Layout".into(), Value::Dictionary(layout));
+
+        let imported = profile_from_dict(&profile);
+        assert_eq!(imported.status_bar, Some(true));
+        assert_eq!(
+            imported.status_bar_components,
+            Some(vec![StatusBarComponent::Cwd, StatusBarComponent::Clock])
+        );
     }
 
     #[test]

@@ -8,6 +8,7 @@ mod render;
 mod render_check;
 mod search;
 mod shell_install;
+mod statusbar;
 mod triggers;
 
 use std::path::PathBuf;
@@ -208,6 +209,8 @@ fn merge_profile(target: &mut Profile, source: &Profile) {
         background_image_mode,
         background_image_blend,
         minimum_contrast,
+        status_bar,
+        status_bar_components,
         shell,
         working_directory,
     );

@@ -37,6 +37,7 @@ pub enum Action {
     NextMark,
     SelectOutput,
     CopyOutput,
+    ToggleStatusBar,
 }
 
 impl Action {
@@ -74,6 +75,7 @@ impl Action {
                 "next_mark" => NextMark,
                 "select_output" => SelectOutput,
                 "copy_output" => CopyOutput,
+                "toggle_status_bar" | "show_status_bar" => ToggleStatusBar,
                 // `select_tab_1` .. `select_tab_9`
                 other => {
                     let index = other.strip_prefix("select_tab_")?.parse::<usize>().ok()?;
@@ -124,6 +126,7 @@ pub fn default_bindings() -> HashMap<String, Action> {
     add("ctrl+shift+n", NextMark);
     add("ctrl+shift+a", SelectOutput);
     add("ctrl+shift+o", CopyOutput);
+    add("ctrl+shift+s", ToggleStatusBar);
     map
 }
 

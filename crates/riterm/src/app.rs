@@ -27,6 +27,7 @@ use crate::layout::{PaneNode, Rect, SplitDir};
 use crate::notifications;
 use crate::render::{Renderer, TabInfo};
 use crate::search;
+use crate::statusbar::StatusBarState;
 use crate::triggers::{self, CompiledTrigger, TriggerScanner};
 
 #[cfg(all(unix, not(target_os = "macos")))]
@@ -45,6 +46,9 @@ pub struct Tab {
     pub profile: String,
     pub zoom: f32,
     pub bell: bool,
+    /// Runtime override from the `toggle_status_bar` action. `None` follows the
+    /// profile's `status_bar` setting.
+    pub status_bar_override: Option<bool>,
     /// Highest command-finished epoch already accounted for in this tab.
     pub bell_epoch: u64,
 }
@@ -129,6 +133,8 @@ pub struct App {
     notified_epochs: HashMap<u64, u64>,
     search: Option<SearchState>,
     copy_mode: Option<CopyState>,
+    status_bar: StatusBarState,
+    status_bar_next: Instant,
 }
 
 impl App {
@@ -182,6 +188,8 @@ impl App {
             notified_epochs: HashMap::new(),
             search: None,
             copy_mode: None,
+            status_bar: StatusBarState::new(),
+            status_bar_next: Instant::now() + Duration::from_secs(1),
         }
     }
 
@@ -358,13 +366,40 @@ impl App {
         self.cursor_blink_next = Instant::now() + Duration::from_millis(500);
     }
 
-    fn content_rect(&self) -> Rect {
+    fn status_bar_height(&self, profile: &ResolvedProfile) -> f32 {
+        if profile.status_bar {
+            (self.config.general.status_bar_height * self.scale as f32).clamp(0.0, 240.0)
+        } else {
+            0.0
+        }
+    }
+
+    /// Tab bar, optional status bar, and terminal content rectangles.
+    fn layout_rects(&self, profile: &ResolvedProfile) -> (Rect, Option<Rect>, Rect) {
         let Some(renderer) = &self.renderer else {
-            return Rect::new(0.0, 0.0, 800.0, 600.0);
+            return (
+                Rect::new(0.0, 0.0, 800.0, 30.0),
+                None,
+                Rect::new(0.0, 30.0, 800.0, 570.0),
+            );
         };
-        let (w, h) = renderer.surface_size();
-        let bar = self.tab_bar_height().min(h as f32);
-        Rect::new(0.0, bar, w as f32, (h as f32 - bar).max(1.0))
+        let (width, height) = renderer.surface_size();
+        window_areas(
+            width as f32,
+            height as f32,
+            self.tab_bar_height(),
+            self.status_bar_height(profile),
+            self.config.general.status_bar_position,
+        )
+    }
+
+    fn content_rect(&self) -> Rect {
+        let profile = self.profile_for_index(self.active_tab);
+        self.layout_rects(&profile).2
+    }
+
+    fn content_rect_for(&self, profile: &ResolvedProfile) -> Rect {
+        self.layout_rects(profile).2
     }
 
     fn profile_for_index(&self, index: usize) -> ResolvedProfile {
@@ -376,8 +411,22 @@ impl App {
         let mut profile = self.config.resolve(name);
         if let Some(tab) = self.tabs.get(index) {
             profile.font_size = (profile.font_size * tab.zoom).clamp(4.0, 96.0);
+            if let Some(status_bar) = tab.status_bar_override {
+                profile.status_bar = status_bar;
+            }
         }
         profile
+    }
+
+    fn toggle_status_bar(&mut self) {
+        let Some(tab) = self.tabs.get_mut(self.active_tab) else {
+            return;
+        };
+        let profile = self.config.resolve(&tab.profile);
+        let current = tab.status_bar_override.unwrap_or(profile.status_bar);
+        tab.status_bar_override = Some(!current);
+        self.mark_all_dirty();
+        self.request_redraw();
     }
 
     fn pane_rects(&self, tab: &Tab) -> (Vec<(u64, Rect)>, Vec<Rect>) {
@@ -395,7 +444,7 @@ impl App {
             Some(renderer) => renderer.cell_size(&profile),
             None => (8.0, 16.0),
         };
-        let content = self.content_rect();
+        let content = self.content_rect_for(&profile);
         let padding = self.config.general.padding * self.scale as f32;
         let inner = content.inset(padding);
         let cols = ((inner.w / cell_w).floor() as usize).max(1);
@@ -410,6 +459,7 @@ impl App {
                     profile: profile_name,
                     zoom: 1.0,
                     bell: false,
+                    status_bar_override: None,
                     bell_epoch: 0,
                 };
                 self.tabs.push(tab);
@@ -1222,6 +1272,7 @@ impl App {
             Action::NextMark => self.jump_mark(true),
             Action::SelectOutput => self.select_output(false),
             Action::CopyOutput => self.select_output(true),
+            Action::ToggleStatusBar => self.toggle_status_bar(),
         }
     }
 
@@ -1400,14 +1451,7 @@ impl App {
         };
         let size = window.inner_size();
         let profile = self.profile_for_index(self.active_tab);
-        let tab_bar_h = self.tab_bar_height().min(size.height as f32);
-        let tab_bar = Rect::new(0.0, 0.0, size.width as f32, tab_bar_h);
-        let content = Rect::new(
-            0.0,
-            tab_bar_h,
-            size.width as f32,
-            (size.height as f32 - tab_bar_h).max(1.0),
-        );
+        let (tab_bar, status_bar_rect, content) = self.layout_rects(&profile);
 
         let active_session = self.tabs.get(self.active_tab).map(|tab| tab.active);
         let overlay_text = self.search_status().filter(|_| {
@@ -1519,6 +1563,20 @@ impl App {
         }
 
         renderer.prepare_tab_bar(&infos, &profile, tab_bar);
+
+        if let Some(rect) = status_bar_rect {
+            let session = self
+                .tabs
+                .get(self.active_tab)
+                .and_then(|tab| tab.sessions.get(&tab.active));
+            let segments = self.status_bar.segments(&profile, session, Instant::now());
+            renderer.prepare_status_bar(
+                &segments,
+                &profile,
+                rect,
+                self.config.general.status_bar_position == riterm_config::StatusBarPosition::Top,
+            );
+        }
 
         if let Some(text) = overlay_text {
             let height = 28.0 * self.scale as f32;
@@ -1964,12 +2022,54 @@ impl ApplicationHandler<UserEvent> for App {
             self.request_redraw();
         }
 
-        let deadline = if blinking {
-            self.cursor_blink_next.min(self.config_poll_next)
-        } else {
-            self.config_poll_next
-        };
+        // The clock, load, memory, and battery components tick once a second.
+        let status_bar = profile.status_bar && !self.tabs.is_empty();
+        if status_bar && now >= self.status_bar_next {
+            self.status_bar_next = now + Duration::from_secs(1);
+            self.request_redraw();
+        }
+
+        let mut deadline = self.config_poll_next;
+        if blinking {
+            deadline = deadline.min(self.cursor_blink_next);
+        }
+        if status_bar {
+            deadline = deadline.min(self.status_bar_next);
+        }
         event_loop.set_control_flow(ControlFlow::WaitUntil(deadline));
+    }
+}
+
+/// Split a window into the tab bar, optional status bar, and terminal content.
+fn window_areas(
+    width: f32,
+    height: f32,
+    tab_bar_height: f32,
+    status_bar_height: f32,
+    position: riterm_config::StatusBarPosition,
+) -> (Rect, Option<Rect>, Rect) {
+    let tab_bar_height = tab_bar_height.min(height);
+    let tab_bar = Rect::new(0.0, 0.0, width, tab_bar_height);
+    let status_height = status_bar_height.min((height - tab_bar_height).max(0.0));
+    let content_height = (height - tab_bar_height - status_height).max(1.0);
+    if status_height <= 0.0 {
+        return (
+            tab_bar,
+            None,
+            Rect::new(0.0, tab_bar_height, width, content_height),
+        );
+    }
+    match position {
+        riterm_config::StatusBarPosition::Top => (
+            tab_bar,
+            Some(Rect::new(0.0, tab_bar_height, width, status_height)),
+            Rect::new(0.0, tab_bar_height + status_height, width, content_height),
+        ),
+        riterm_config::StatusBarPosition::Bottom => (
+            tab_bar,
+            Some(Rect::new(0.0, height - status_height, width, status_height)),
+            Rect::new(0.0, tab_bar_height, width, content_height),
+        ),
     }
 }
 
@@ -2123,10 +2223,37 @@ fn _typecheck(_: Key) {}
 mod tests {
     use super::{
         anchored_mark_point, human_duration, notification_summary, observe_finished_commands,
+        window_areas,
     };
     use alacritty_terminal::index::{Column, Line, Point};
     use riterm_core::{Mark, MarkKind};
     use std::time::{Duration, Instant};
+
+    #[test]
+    fn status_bar_reserves_content_space() {
+        use riterm_config::StatusBarPosition;
+
+        let (tab_bar, status, content) =
+            window_areas(1000.0, 700.0, 30.0, 28.0, StatusBarPosition::Top);
+        assert_eq!(tab_bar, crate::layout::Rect::new(0.0, 0.0, 1000.0, 30.0));
+        assert_eq!(
+            status,
+            Some(crate::layout::Rect::new(0.0, 30.0, 1000.0, 28.0))
+        );
+        assert_eq!(content, crate::layout::Rect::new(0.0, 58.0, 1000.0, 642.0));
+
+        let (_, status, content) =
+            window_areas(1000.0, 700.0, 30.0, 28.0, StatusBarPosition::Bottom);
+        assert_eq!(
+            status,
+            Some(crate::layout::Rect::new(0.0, 672.0, 1000.0, 28.0))
+        );
+        assert_eq!(content, crate::layout::Rect::new(0.0, 30.0, 1000.0, 642.0));
+
+        let (_, status, content) = window_areas(1000.0, 700.0, 30.0, 0.0, StatusBarPosition::Top);
+        assert!(status.is_none());
+        assert_eq!(content, crate::layout::Rect::new(0.0, 30.0, 1000.0, 670.0));
+    }
 
     #[test]
     fn marks_stay_anchored_as_history_grows() {

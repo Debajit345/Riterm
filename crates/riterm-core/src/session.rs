@@ -117,6 +117,12 @@ pub struct Session {
     pub term: Term<TermProxy>,
     pub size: TermSize,
     pub title: String,
+    /// Last working directory reported by the shell (OSC 7 or 1337;CurrentDir).
+    pub cwd: Option<PathBuf>,
+    /// User reported by OSC 7, which may be a remote account after `ssh`.
+    pub remote_user: Option<String>,
+    /// Host reported by OSC 7, which may be remote after `ssh`.
+    pub remote_host: Option<String>,
     pub command_state: CommandState,
     pub marks: Vec<Mark>,
     pub dirty: bool,
@@ -263,12 +269,19 @@ impl Session {
             ..TermConfig::default()
         };
         let term = Term::new(term_config, &size, proxy);
+        let cwd = config
+            .working_directory
+            .clone()
+            .or_else(|| std::env::current_dir().ok());
 
         Ok(Self {
             id,
             term,
             size,
             title: String::new(),
+            cwd,
+            remote_user: None,
+            remote_host: None,
             command_state: CommandState::Idle,
             marks: Vec::new(),
             dirty: true,
@@ -301,6 +314,22 @@ impl Session {
                     self.processor.advance(&mut self.term, &bytes[pos..end]);
                     pos = end;
                     self.record_mark(mark);
+                }
+                ScanItem::CurrentDirectory {
+                    end,
+                    path,
+                    user,
+                    host,
+                } => {
+                    self.processor.advance(&mut self.term, &bytes[pos..end]);
+                    pos = end;
+                    self.cwd = Some(PathBuf::from(path));
+                    if user.is_some() {
+                        self.remote_user = user;
+                    }
+                    if host.is_some() {
+                        self.remote_host = host;
+                    }
                 }
             }
         }
@@ -452,6 +481,22 @@ mod tests {
         assert_eq!(session.command_state, CommandState::Idle);
         assert_eq!(session.last_exit_code, Some(1));
         assert!(session.command_finished_epoch > 0);
+    }
+
+    #[test]
+    fn tracks_working_directory_reports() {
+        let mut session = scratch_session();
+        session.feed(b"\x1b]7;file://localhost/home/me/My%20Project\x07");
+        assert_eq!(
+            session.cwd.as_deref(),
+            Some(std::path::Path::new("/home/me/My Project"))
+        );
+
+        session.feed(b"\x1b]1337;CurrentDir=/var/log\x07");
+        assert_eq!(
+            session.cwd.as_deref(),
+            Some(std::path::Path::new("/var/log"))
+        );
     }
 
     #[test]

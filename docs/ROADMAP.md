@@ -52,6 +52,7 @@ Target: replace a normal terminal for everyday work.
 - [x] OSC 8 link hit-testing and open-in-browser
 - [x] Word/URL selection and middle-click paste
 - [x] Desktop notifications for command finish and BEL
+- [x] OSC 7 / `1337;CurrentDir` current-directory tracking, including remote user/host
 
 ## Milestone 3 — iTerm2 power features
 
@@ -64,7 +65,7 @@ Target: the features that make iTerm2 distinctive.
 - [x] Triggers: regex match → notify or tab bell
 - [ ] Triggers: highlight, annotate, run command
 - [ ] Inline images: iTerm2 image protocol, then sixel
-- [ ] Status bar with components (cwd, git, command status, clock)
+- [x] Status bar with components (cwd, git, command status, clock, host, user, load, memory, battery, session, spacers, custom text)
 - [ ] Badges and user variables (OSC 1337 SetUserVar)
 - [ ] Shell utilities: `imgcat`, `it2copy`, `it2dl`, `it2getvar`
 - [ ] Semantic/block selection

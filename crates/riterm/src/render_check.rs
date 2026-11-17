@@ -8,18 +8,21 @@ use std::sync::Arc;
 
 use alacritty_terminal::index::{Column, Line, Point};
 use anyhow::{Context, Result};
-use riterm_config::{Config, ItermColors, ResolvedProfile, ThemeVariant};
+use riterm_config::{Config, ItermColors, ResolvedProfile, StatusBarPosition, ThemeVariant};
 use riterm_core::{Session, SessionConfig, SessionSink};
 
 use crate::layout::Rect;
 use crate::render::{Renderer, TabInfo};
+use crate::statusbar::StatusBarState;
 
 const TAB_BAR_HEIGHT: f32 = 34.0;
 const PADDING: f32 = 8.0;
 
 pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<()> {
     let config = Config::load(config_path).unwrap_or_default();
-    let profile = config.resolve(&config.general.default_profile);
+    let mut profile = config.resolve(&config.general.default_profile);
+    let show_status_bar = profile.status_bar || std::env::var_os("RITERM_RENDER_STATUS").is_some();
+    profile.status_bar = show_status_bar;
     let secondary = preset_profile(&profile, "Solarized Dark");
 
     let mut renderer = Renderer::new_offscreen(width, height, 1.0)?;
@@ -67,8 +70,32 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
         Rect::new(0.0, 0.0, width as f32, TAB_BAR_HEIGHT),
     );
 
-    let content_top = TAB_BAR_HEIGHT;
-    let content_height = (height as f32 - content_top).max(1.0);
+    let mut content_top = TAB_BAR_HEIGHT;
+    let mut content_height = (height as f32 - content_top).max(1.0);
+    let status_height = if show_status_bar {
+        config.general.status_bar_height.min(content_height)
+    } else {
+        0.0
+    };
+    let status_rect = match (show_status_bar, config.general.status_bar_position) {
+        (true, StatusBarPosition::Top) => {
+            let rect = Rect::new(0.0, content_top, width as f32, status_height);
+            content_top += status_height;
+            content_height = (content_height - status_height).max(1.0);
+            Some(rect)
+        }
+        (true, StatusBarPosition::Bottom) => {
+            let rect = Rect::new(
+                0.0,
+                height as f32 - status_height,
+                width as f32,
+                status_height,
+            );
+            content_height = (content_height - status_height).max(1.0);
+            Some(rect)
+        }
+        (false, _) => None,
+    };
     let split = (width as f32 * 0.62).round();
     let left = Rect::new(0.0, content_top, split - 1.0, content_height);
     let right = Rect::new(split, content_top, width as f32 - split, content_height);
@@ -98,11 +125,23 @@ pub fn run(path: &Path, config_path: &Path, width: u32, height: u32) -> Result<(
         1.0,
     );
 
+    if let Some(rect) = status_rect {
+        let mut state = StatusBarState::demo();
+        let segments = state.segments(&profile, Some(&primary), std::time::Instant::now());
+        renderer.prepare_status_bar(
+            &segments,
+            &profile,
+            rect,
+            config.general.status_bar_position == StatusBarPosition::Top,
+        );
+    }
+
     if show_search {
+        let overlay_top = (content_top + content_height - 36.0).max(content_top);
         renderer.prepare_overlay(
             "Find: Riterm    1/4 · Enter next · Shift+Enter previous · Esc close",
             &profile,
-            Rect::new(8.0, height as f32 - 36.0, width as f32 - 16.0, 28.0),
+            Rect::new(8.0, overlay_top, width as f32 - 16.0, 28.0),
             profile.cursor,
         );
     }
@@ -188,6 +227,10 @@ fn primary_screen() -> Vec<u8> {
     s.push_str("\x1b[32mtest result: ok.\x1b[0m 15 passed; 0 failed; 0 ignored\r\n");
     s.push_str("\r\n");
     s.push_str("\x1b[38;5;42m$ \x1b[0m");
+    // Status bar demo data: a current directory and a successful command.
+    s.push_str("\x1b]7;file://studio/home/debaxoid/projects/riterm\x07");
+    s.push_str("\x1b]133;D;0\x07");
+    s.push_str("\x1b]133;A\x07");
     s.into_bytes()
 }
 
